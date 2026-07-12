@@ -1,0 +1,30 @@
+{
+  "users": [
+    {
+      "username": "tanish",
+      "role": "admin",
+      "password": {
+        "algorithm": "scrypt",
+        "salt": "base64...",
+        "hash": "base64...",
+        "keyLength": 64,
+        "N": 16384,
+        "r": 8,
+        "p": 1
+      }
+    },
+    {
+      "username": "engineer-a",
+      "role": "user",
+      "password": {
+        "algorithm": "scrypt",
+        "salt": "base64...",
+        "hash": "base64...",
+        "keyLength": 64,
+        "N": 16384,
+        "r": 8,
+        "p": 1
+      }
+    }
+  ]
+}

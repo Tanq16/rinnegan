@@ -1,0 +1,28 @@
+{
+  "name": "rinnegan",
+  "version": "0.1.0",
+  "description": "Self-contained, self-hosted shared web terminal for a small trusted team; distributed as per-platform tarballs bundling their own Node runtime.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "rinnegan": "bin/rinnegan.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node bin/rinnegan.js serve --config ./config.json",
+    "dev": "node --watch bin/rinnegan.js serve --config ./config.json"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public"
+  ],
+  "dependencies": {
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.0"
+  }
+}

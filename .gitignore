@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# build output / release artifacts
+dist/
+
+# local dev runtime files (real config/users are generated into the tarball at build time)
+config.json
+users.json
+state.json
+
+# OS cruft
+.DS_Store

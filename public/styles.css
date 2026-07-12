@@ -1,0 +1,246 @@
+/* Mono variant (single-cell Nerd icon advances) — matches kitty's font_family */
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  src: url('/vendor/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  src: url('/vendor/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Catppuccin Mocha UI chrome palette (spec.md Theme section) */
+:root {
+  --base: #1e1e2e;
+  --crust: #11111b;
+  --mantle: #181825;
+  --surface0: #313244;
+  --lavender: #b4befe;
+  --overlay0: #6c7086;
+  --text: #cdd6f4;
+  --overlay2: #9399b2;
+  --mauve: #cba6f7;
+  --blue: #89b4fa;
+  --yellow: #f9e2af;
+  --red: #f38ba8;
+  --green: #a6e3a1;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--base);
+  color: var(--text);
+  font: 400 14px/1.45 'JetBrainsMono Nerd Font Mono', monospace;
+}
+[hidden] { display: none !important; }
+
+button, select, input { font: inherit; }
+button {
+  background: var(--surface0);
+  color: var(--text);
+  border: 1px solid var(--overlay0);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--lavender); }
+button:disabled { opacity: .45; cursor: default; }
+button.danger { color: var(--red); border-color: var(--red); }
+select {
+  background: var(--crust);
+  color: var(--text);
+  border: 1px solid var(--overlay0);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+/* ---- terminal page ---- */
+
+#stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px; /* keep fitFont's avail = clientWidth/Height - 16 in sync */
+  background: var(--mantle); /* letterbox outside the cols×rows grid */
+}
+body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
+
+#probe {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  visibility: hidden;
+  white-space: pre;
+  font: 400 16px 'JetBrainsMono Nerd Font Mono', monospace;
+}
+
+#control-toggle {
+  position: fixed;
+  top: 6px;
+  right: 6px;
+  z-index: 30;
+  background: var(--crust);
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 5px;
+  opacity: .35; /* unobtrusive over the terminal until needed */
+  transition: opacity .15s ease;
+}
+#control-toggle:hover,
+#control-toggle:focus-visible,
+#control-toggle[aria-expanded="true"] { opacity: 1; }
+#control-toggle[aria-expanded="true"] { border-color: var(--mauve); color: var(--mauve); }
+
+#panel {
+  position: fixed;
+  top: 40px;
+  right: 6px;
+  z-index: 29;
+  width: 320px;
+  max-height: calc(100vh - 52px);
+  overflow-y: auto;
+  background: var(--mantle);
+  border: 1px solid var(--overlay0);
+  border-radius: 8px;
+  padding: 14px;
+  display: none;
+}
+#panel.open { display: block; }
+#panel section {
+  margin-top: 14px;
+  border-top: 1px solid var(--surface0);
+  padding-top: 10px;
+}
+#panel h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--overlay2);
+}
+
+.facts { margin: 0; display: grid; gap: 4px; }
+.facts div { display: flex; justify-content: space-between; gap: 12px; }
+.facts dt { color: var(--overlay2); }
+.facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+#p-status[data-state="connected"] { color: var(--green); }
+#p-status[data-state="connecting"],
+#p-status[data-state="reconnecting"] { color: var(--yellow); }
+#p-status[data-state="disconnected"] { color: var(--red); }
+
+.row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+
+#logout-form {
+  margin: 14px 0 0;
+  border-top: 1px solid var(--surface0);
+  padding-top: 12px;
+}
+#logout-form button { width: 100%; color: var(--blue); }
+
+/* ---- bars / overlays / toast ---- */
+
+#request-bar, #ended-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--mantle);
+  border: 1px solid var(--yellow);
+  border-radius: 8px;
+  padding: 8px 14px;
+  z-index: 35;
+}
+#request-bar { top: 12px; }
+#ended-bar { bottom: 16px; border-color: var(--red); }
+#ended-bar span { color: var(--red); }
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 17, 27, .82);
+}
+.overlay-card {
+  background: var(--mantle);
+  border: 1px solid var(--overlay0);
+  border-radius: 10px;
+  padding: 24px 28px;
+  text-align: center;
+}
+#overlay-msg { margin: 0 0 14px; }
+
+#toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  background: var(--surface0);
+  border-left: 3px solid var(--mauve);
+  border-radius: 6px;
+  padding: 10px 14px;
+  max-width: 60vw;
+  overflow-wrap: anywhere;
+}
+
+/* ---- login page ---- */
+
+body.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-card {
+  width: min(360px, 92vw);
+  background: var(--mantle);
+  border: 1px solid var(--surface0);
+  border-radius: 10px;
+  padding: 28px;
+}
+.login-card h1 {
+  margin: 0 0 18px;
+  font-size: 18px;
+  color: var(--mauve);
+}
+.login-card label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--overlay2);
+}
+.login-card input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  background: var(--crust);
+  color: var(--text);
+  border: 1px solid var(--overlay0);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.login-card input:focus { outline: none; border-color: var(--lavender); }
+.login-card button {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px;
+  background: var(--mauve);
+  border-color: var(--mauve);
+  color: var(--crust);
+  font-weight: 700;
+}
+.login-card .error { margin: 0 0 12px; color: var(--red); }

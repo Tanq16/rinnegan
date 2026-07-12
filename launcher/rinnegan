@@ -1,0 +1,68 @@
+#!/bin/sh
+# rinnegan launcher: runs the bundled Node runtime against the bundled CLI.
+# Fully self-contained -- never relies on any Node found in PATH.
+set -e
+
+# --- Resolve this script's own real path, following symlinks (POSIX sh) ---
+# We avoid `readlink -f` / `realpath` since they are not portable across
+# macOS, BusyBox, and coreutils. Instead we walk the symlink chain by hand.
+SELF=$0
+# If invoked via PATH without a slash, locate it via command -v.
+case $SELF in
+  */*) ;;
+  *)
+    RESOLVED=$(command -v -- "$SELF" 2>/dev/null || true)
+    if [ -n "$RESOLVED" ]; then
+      SELF=$RESOLVED
+    fi
+    ;;
+esac
+# Follow symlinks until we reach the real file.
+while [ -h "$SELF" ]; do
+  LINK=$(readlink -- "$SELF")
+  case $LINK in
+    /*)
+      # Absolute symlink target.
+      SELF=$LINK
+      ;;
+    *)
+      # Relative symlink target: resolve against the link's directory.
+      SELF=$(dirname -- "$SELF")/$LINK
+      ;;
+  esac
+done
+
+# BINDIR = directory containing this script, canonicalized to an absolute path.
+BINDIR=$(cd -P -- "$(dirname -- "$SELF")" && pwd)
+# ROOT = parent of BINDIR (the bundle root).
+ROOT=$(cd -P -- "$BINDIR/.." && pwd)
+
+NODE=$ROOT/runtime/bin/node
+APP=$ROOT/lib/bin/rinnegan.js
+
+# --- macOS: best-effort strip the quarantine attribute from the bundle ---
+# Browser-downloaded tarballs get com.apple.quarantine set on extracted files,
+# which makes Gatekeeper refuse to run the bundled `node` binary. Removing it
+# recursively lets the bundle run without manual intervention. All errors are
+# ignored so this never blocks startup on systems without xattr.
+if [ "$(uname -s)" = "Darwin" ]; then
+  xattr -d -r com.apple.quarantine "$ROOT" >/dev/null 2>&1 || true
+fi
+
+# --- Inject a default --config unless the user supplied one ---
+# If none of the passed arguments is exactly "--config", append
+# `--config <ROOT>/config.json` so bare `rinnegan` / `rinnegan serve` work.
+HAS_CONFIG=0
+for arg in "$@"; do
+  if [ "$arg" = "--config" ]; then
+    HAS_CONFIG=1
+    break
+  fi
+done
+
+# exec so signals (SIGINT/SIGTERM) propagate to node and PID stays stable.
+if [ "$HAS_CONFIG" -eq 1 ]; then
+  exec "$NODE" "$APP" "$@"
+else
+  exec "$NODE" "$APP" "$@" --config "$ROOT/config.json"
+fi

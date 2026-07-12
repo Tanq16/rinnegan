@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared Web Terminal</title>
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/vendor/xterm.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body class="term-page readonly">
+  <div id="stage"><div id="terminal"></div></div>
+  <span id="probe" aria-hidden="true">WWWWWWWWWW</span>
+
+  <button id="control-toggle" type="button" aria-expanded="false" aria-controls="panel">Control</button>
+
+  <aside id="panel">
+    <dl class="facts">
+      <div><dt>You</dt><dd id="p-user">&ndash;</dd></div>
+      <div><dt>Viewers</dt><dd id="p-viewers">&ndash;</dd></div>
+      <div><dt>Controller</dt><dd id="p-controller">&ndash;</dd></div>
+      <div><dt>Pending</dt><dd id="p-pending">&ndash;</dd></div>
+      <div><dt>Mode</dt><dd id="p-mode">&ndash;</dd></div>
+      <div><dt>Link</dt><dd id="p-status" data-state="connecting">connecting</dd></div>
+    </dl>
+
+    <div class="row">
+      <button id="take-btn" type="button">Request Control</button>
+      <button id="release-btn" type="button" hidden>Release Control</button>
+    </div>
+
+    <section id="size-section">
+      <h3>Size <span id="p-size"></span></h3>
+      <div class="row">
+        <button type="button" class="preset" data-cols="100" data-rows="30">100&times;30</button>
+        <button type="button" class="preset" data-cols="120" data-rows="36">120&times;36</button>
+        <button type="button" class="preset" data-cols="140" data-rows="42">140&times;42</button>
+        <button type="button" class="preset" data-cols="160" data-rows="48">160&times;48</button>
+      </div>
+      <div class="row">
+        <button id="cols-dec" type="button">&minus;cols</button>
+        <button id="cols-inc" type="button">+cols</button>
+        <button id="rows-dec" type="button">&minus;rows</button>
+        <button id="rows-inc" type="button">+rows</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Keys</h3>
+      <div class="row">
+        <button type="button" class="seq" data-seq="esc">Esc</button>
+        <button type="button" class="seq" data-seq="ctrl-c">Ctrl-C</button>
+        <button type="button" class="seq" data-seq="ctrl-d">Ctrl-D</button>
+        <button type="button" class="seq" data-seq="ctrl-z">Ctrl-Z</button>
+      </div>
+      <label class="check"><input type="checkbox" id="alt-esc" checked> Alt sends Escape</label>
+    </section>
+
+    <section id="admin-section" hidden>
+      <h3>Admin</h3>
+      <label class="check">Mode
+        <select id="mode-select">
+          <option value="soft">soft</option>
+          <option value="fast">fast</option>
+        </select>
+      </label>
+      <div class="row">
+        <button id="restart-btn" type="button">Restart Shell</button>
+        <button id="kick-btn" type="button" class="danger">Kick All</button>
+      </div>
+    </section>
+
+    <form method="post" action="/logout" id="logout-form"><button type="submit">Log out</button></form>
+  </aside>
+
+  <div id="request-bar" hidden>
+    <span id="request-text"></span>
+    <button id="grant-btn" type="button">Grant</button>
+    <button id="deny-btn" type="button">Deny</button>
+  </div>
+
+  <div id="ended-bar" hidden>
+    <span>Shell exited.</span>
+    <button id="ended-restart" type="button" hidden>Restart Shell</button>
+  </div>
+
+  <div id="overlay" hidden>
+    <div class="overlay-card">
+      <p id="overlay-msg"></p>
+      <button id="reconnect-btn" type="button">Reconnect</button>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+</body>
+</html>
