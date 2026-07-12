@@ -34,7 +34,7 @@ const config = {
   listen: { host: '127.0.0.1', port: 8787 },
   cookie: { secure: false, name: 'rinnegan', ttlSeconds: 86400 },
   terminal: {
-    shell: '/usr/bin/env bash -l',
+    shell: '/usr/bin/env zsh -l',
     cols: 120,
     rows: 36,
     autoRestartShell: false,

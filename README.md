@@ -84,7 +84,7 @@ defaults, so you only set what you want to change.
 | `cookie.name` | `rinnegan` | Session cookie (HttpOnly, SameSite=Lax, Path=/) |
 | `cookie.secure` | `false` | Set `true` when serving over HTTPS |
 | `cookie.ttlSeconds` | `86400` | 24h session; minimum 60 |
-| `terminal.shell` | `/usr/bin/env bash -l` | Split on whitespace into `(file, args)`; no shell quoting |
+| `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting |
 | `terminal.cwd` | `$HOME` | Omitted from the seed so it defaults to your home directory |
 | `terminal.cols` / `rows` | `120` / `36` | Canonical shared grid; every browser renders this size |
 | `terminal.autoRestartShell` | `false` | Keep `false`: a dead shell shows a Restart action instead of crash-looping |
@@ -96,12 +96,13 @@ defaults, so you only set what you want to change.
 | `usersFile` | `./users.json` | scrypt password records only |
 | `stateFile` | `./state.json` | Persists **only** the current control mode; written mode 0600 |
 
-The shell defaults to **`/usr/bin/env bash -l`** for portability across the release
-platforms. To use a different shell, edit `terminal.shell` — for example:
+The shell defaults to **`/usr/bin/env zsh -l`**. Note that zsh is not preinstalled on some
+minimal Linux distributions (e.g. stock Ubuntu/Debian) — install it there, or point
+`terminal.shell` at a shell that exists, for example:
 
 ```jsonc
 {
-  "terminal": { "shell": "/usr/bin/env zsh -l" }
+  "terminal": { "shell": "/usr/bin/env bash -l" }
 }
 ```
 
