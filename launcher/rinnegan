@@ -36,6 +36,7 @@ done
 BINDIR=$(cd -P -- "$(dirname -- "$SELF")" && pwd)
 # ROOT = parent of BINDIR (the bundle root).
 ROOT=$(cd -P -- "$BINDIR/.." && pwd)
+export RINNEGAN_ROOT="$ROOT"
 
 NODE=$ROOT/runtime/bin/node
 APP=$ROOT/lib/bin/rinnegan.js

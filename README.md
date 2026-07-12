@@ -34,7 +34,7 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan
 ```
 
-Then open **http://127.0.0.1:8787** in your browser and log in with the seeded account:
+Then open **http://127.0.0.1:8442** in your browser and log in with the seeded account:
 
 - username: `admin`
 - password: `changeme`
@@ -49,6 +49,20 @@ You will be prompted for the new password (input is never echoed). It takes effe
 next login without restarting the server. `./bin/rinnegan` with no subcommand runs the
 server (equivalent to `./bin/rinnegan serve`).
 
+### HTTPS quickstart
+
+To serve over HTTPS on the network, run the bundled Caddy wrapper instead:
+
+```sh
+./bin/rinnegan serve --https
+```
+
+This starts a bundled Caddy that terminates TLS on `:8443` and reverse-proxies to the
+localhost rinnegan server. Then browse to **https://\<host\>:8443**, accept the one-time
+self-signed certificate warning, and log in with the same seeded account. In this mode
+`cookie.secure` is set to `true` automatically, since all real traffic arrives over TLS via
+Caddy. See [HTTPS on the network](#https-on-the-network) for details.
+
 ## Self-contained
 
 Each tarball ships everything it needs:
@@ -57,9 +71,12 @@ Each tarball ships everything it needs:
   never touches any Node on your `PATH`.
 - **A platform-native `node-pty`** compiled for that exact OS/arch (with a working
   `spawn-helper`), so the PTY works out of the box.
+- **The Caddy binary** at `bin/caddy` for optional bundled HTTPS (see
+  [HTTPS on the network](#https-on-the-network)), plus third-party licenses under
+  `licenses/` (Node and Caddy).
 
 The host needs **no Node, python, C/C++ compiler, or `make`**. `rinnegan` runs entirely in
-userspace as the invoking user and binds to `127.0.0.1:8787` (localhost only) by default.
+userspace as the invoking user and binds to `127.0.0.1:8442` (localhost only) by default.
 
 **macOS note.** The launcher best-effort strips the `com.apple.quarantine` extended
 attribute from the extracted bundle so Gatekeeper does not block the bundled `node` binary
@@ -80,9 +97,9 @@ defaults, so you only set what you want to change.
 | Field | Default | Notes |
 | ----- | ------- | ----- |
 | `listen.host` | `127.0.0.1` | Bind localhost; put HTTPS in front for exposure |
-| `listen.port` | `8787` | |
+| `listen.port` | `8442` | |
 | `cookie.name` | `rinnegan` | Session cookie (HttpOnly, SameSite=Lax, Path=/) |
-| `cookie.secure` | `false` | Set `true` when serving over HTTPS |
+| `cookie.secure` | `false` | Set `true` when serving over HTTPS; auto-forced to `true` under `serve --https` |
 | `cookie.ttlSeconds` | `86400` | 24h session; minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting |
 | `terminal.cwd` | `$HOME` | Omitted from the seed so it defaults to your home directory |
@@ -189,15 +206,53 @@ server without a restart.
   the process (the seed writes `users.json` with mode 0600).
 
 Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bound rinnegan`.
-A minimal Caddyfile:
+The fastest way to get there is the bundled `serve --https` wrapper described below.
+
+## HTTPS on the network
+
+Each tarball bundles **Caddy 2.11.4** (Apache-2.0; its license is shipped at
+`licenses/caddy-LICENSE`) so you can serve HTTPS on the network with no extra downloads.
+
+```sh
+./bin/rinnegan serve --https
+```
+
+This runs Caddy as a **managed child process**: it listens on `0.0.0.0:8443` and
+reverse-proxies to `127.0.0.1:8442`, so rinnegan itself stays localhost-only and is never
+directly network-exposed. Browse to **https://\<host\>:8443** and log in.
+
+- **Self-signed certificate.** Caddy issues the certificate from its own internal CA, so
+  browsers show a **one-time warning** you accept once per client. There is no way to remove
+  that warning without installing the CA on every client machine, which is out of scope
+  here.
+- **Self-contained state.** Caddy's state (its CA and issued certificates) is stored in a
+  `caddy-data/` directory inside the bundle via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`, keeping
+  it fully self-contained. To regenerate the CA, delete `caddy-data/` and restart.
+- **Changing the port.** If you change `listen.port` in `config.json`, you must edit the
+  bundled `Caddyfile` so its `reverse_proxy` target matches.
+- **Still no rate limiting.** There is still **no login rate limiting** — keep it on a
+  trusted network even over HTTPS.
+
+Under `--https`, `cookie.secure` is forced to `true` automatically, since all real traffic
+arrives over TLS via Caddy.
+
+If you prefer, rinnegan and Caddy can also run as **two separate processes**: run
+`./bin/rinnegan serve`, then in another shell run `./bin/caddy` manually with
+`XDG_DATA_HOME` pointed at a local directory (and `XDG_CONFIG_HOME` alongside it).
+
+### Bring-your-own domain with a real certificate
+
+The bundled `--https` path uses a self-signed certificate. If instead you have a **public
+domain** and want a **real, browser-trusted certificate**, run rinnegan localhost-only and
+put your own Caddy in front for that domain. A minimal Caddyfile:
 
 ```caddyfile
 terminal.example.com {
-  reverse_proxy 127.0.0.1:8787
+  reverse_proxy 127.0.0.1:8442
 }
 ```
 
-Remember to set `cookie.secure: true` in `config.json` when behind HTTPS.
+Remember to set `cookie.secure: true` in `config.json` when behind HTTPS this way.
 
 ## Build from source (contributors)
 

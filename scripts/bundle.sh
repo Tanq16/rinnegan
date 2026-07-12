@@ -18,6 +18,7 @@
 set -euo pipefail
 
 NODE_VERSION=24.17.0
+CADDY_VERSION=2.11.4
 
 die() {
   echo "bundle.sh: error: $*" >&2
@@ -47,7 +48,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Sanity-check that the repo pieces we copy actually exist.
-for req in bin src public node_modules launcher/rinnegan LICENSE README.md scripts/seed.mjs; do
+for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile LICENSE README.md scripts/seed.mjs; do
   [ -e "$REPO_ROOT/$req" ] || die "missing required repo path: $req"
 done
 
@@ -114,6 +115,44 @@ NODE_BIN_SRC="$NODE_EXTRACT_DIR/$NODE_PKG/bin/node"
 [ -x "$NODE_BIN_SRC" ] || [ -f "$NODE_BIN_SRC" ] || die "node binary not found at $NODE_BIN_SRC after extraction"
 cp "$NODE_BIN_SRC" "$BUNDLE_ROOT/runtime/bin/node"
 chmod 755 "$BUNDLE_ROOT/runtime/bin/node"
+
+# --- Download + extract the pinned Caddy binary for this os/arch. ---
+# Caddy's release naming differs from ours: darwin->mac, x64->amd64.
+case "$OS" in
+  darwin) CADDY_OS="mac" ;;
+  linux)  CADDY_OS="linux" ;;
+esac
+case "$ARCH" in
+  x64)   CADDY_ARCH="amd64" ;;
+  arm64) CADDY_ARCH="arm64" ;;
+esac
+CADDY_PKG="caddy_${CADDY_VERSION}_${CADDY_OS}_${CADDY_ARCH}"
+CADDY_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/${CADDY_PKG}.tar.gz"
+CADDY_TARBALL="$BUILD_ROOT/${CADDY_PKG}.tar.gz"
+
+echo "==> Downloading Caddy: $CADDY_URL"
+curl -fL -o "$CADDY_TARBALL" "$CADDY_URL" || die "failed to download Caddy from $CADDY_URL"
+
+echo "==> Extracting Caddy"
+CADDY_EXTRACT_DIR="$BUILD_ROOT/caddy-extract"
+mkdir -p "$CADDY_EXTRACT_DIR"
+tar xf "$CADDY_TARBALL" -C "$CADDY_EXTRACT_DIR"
+
+CADDY_BIN_SRC="$CADDY_EXTRACT_DIR/caddy"
+[ -f "$CADDY_BIN_SRC" ] || die "caddy binary not found at $CADDY_BIN_SRC after extraction"
+cp "$CADDY_BIN_SRC" "$BUNDLE_ROOT/bin/caddy"
+chmod 755 "$BUNDLE_ROOT/bin/caddy"
+
+# Bundled Caddyfile at the bundle root.
+cp "$REPO_ROOT/launcher/Caddyfile" "$BUNDLE_ROOT/Caddyfile"
+
+# --- Third-party licenses for redistribution. ---
+# Both LICENSE files ship in their respective release tarballs, so a failed
+# copy is a real error (a broken bundle): copy unconditionally so set -e aborts
+# the build rather than silently omitting a license the README promises.
+mkdir -p "$BUNDLE_ROOT/licenses"
+cp "$CADDY_EXTRACT_DIR/LICENSE" "$BUNDLE_ROOT/licenses/caddy-LICENSE"
+cp "$NODE_EXTRACT_DIR/$NODE_PKG/LICENSE" "$BUNDLE_ROOT/licenses/node-LICENSE"
 
 # --- Seed config.json + users.json into the bundle root. ---
 echo "==> Seeding config.json + users.json"

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 const DEFAULTS = {
-  listen: { host: '127.0.0.1', port: 8787 },
+  listen: { host: '127.0.0.1', port: 8442 },
   cookie: { secure: false, name: 'rinnegan', ttlSeconds: 86400 },
   terminal: {
     shell: '/usr/bin/env zsh -l',

@@ -3,7 +3,7 @@
 // Usage: node scripts/seed.mjs <bundleRoot>
 //
 // Writes:
-//   <bundleRoot>/config.json  (mode 0644) - listens on 127.0.0.1:8787, cookie name "rinnegan"
+//   <bundleRoot>/config.json  (mode 0644) - listens on 127.0.0.1:8442, cookie name "rinnegan"
 //   <bundleRoot>/users.json   (mode 0600) - a single seeded admin/changeme account
 //
 // The scrypt password hasher is imported from ../src/auth.js so the record
@@ -31,7 +31,7 @@ const bundleRoot = path.resolve(bundleRootArg);
 
 // config.json: seeded, ready-to-run. cwd omitted so it defaults to $HOME at runtime.
 const config = {
-  listen: { host: '127.0.0.1', port: 8787 },
+  listen: { host: '127.0.0.1', port: 8442 },
   cookie: { secure: false, name: 'rinnegan', ttlSeconds: 86400 },
   terminal: {
     shell: '/usr/bin/env zsh -l',
