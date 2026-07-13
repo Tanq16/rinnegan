@@ -175,6 +175,11 @@ shared session — the explicit Shared button while split still switches directl
 automatic reconnect after a network blip silently rejoins the shared session you were in;
 a fresh page load always starts at the chooser.
 
+**Leave session** (in the Control panel) returns you to the chooser from either mode.
+Leaving the shared session only detaches *you* — the shared shell is server-owned and keeps
+running for everyone else, so it is there when you rejoin. Leaving a split ends that split
+shell, exactly like exiting it or switching to Shared.
+
 A **split** gives you your own fresh shell on the same host while everyone else keeps the
 shared terminal. Splitting releases control immediately if you held it, and typing in your
 split never requires control — it is your shell. Keystrokes never cross sessions: input is
@@ -193,6 +198,29 @@ about tmux.
 A split is *your own shell*, not your own environment: it runs as the same OS user as the
 shared session, with the same filesystem and visible processes. It is not a sandbox — treat
 it with the same care as the shared shell.
+
+## File upload
+
+`Ctrl-V` in a browser terminal can't reach a CLI that reads the *host's* clipboard — a
+pasted image is in your browser, not on the box the shell (or an SSH hop from it) runs on.
+The Control panel's **Upload file** button bridges that gap. It opens a small chooser with
+two sources:
+
+- **From clipboard** — grabs an image off your clipboard (needs a secure context, i.e. the
+  HTTPS setup below or `localhost`).
+- **Choose file…** — a normal file picker for any file.
+
+The file is streamed over the WebSocket (chunked, 25 MB cap) and written to `/tmp` on the
+host as `/tmp/<5-random-alnum>-<name>`. The random prefix keeps repeats unique; the original
+name is reduced to a bare basename in `[A-Za-z0-9._-]` (no path separators, no traversal, no
+shell metacharacters) so the path is safe to use unquoted. rinnegan never deletes these —
+`/tmp` is the OS's to reap.
+
+Once the file lands, its path is **typed into your terminal at the cursor with a trailing
+space and no Enter**, so a tool like [Claude Code](https://claude.com/claude-code) reads the
+image (it auto-detects image paths) and you can still add a prompt before submitting. In the
+shared session this needs control (it types into the shared shell); without it — or from the
+lobby — the path is shown and copied to your clipboard instead, so you can place it yourself.
 
 ## Theme and fonts
 

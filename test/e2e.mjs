@@ -229,6 +229,7 @@ async function main() {
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-e2e-'));
   let server = null;
   const clients = [];
+  const uploadedPaths = []; // /tmp files the upload checks create; unlinked in finally
   const track = (c) => { clients.push(c); return c; };
 
   try {
@@ -710,6 +711,163 @@ async function main() {
       }
     });
 
+    // ---------- File upload ----------
+    const b64 = (buf) => Buffer.from(buf).toString('base64');
+
+    await check('upload from the lobby lands in /tmp with a 5-char random prefix', async () => {
+      const up = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await up.nextText(5000, 'upload socket hello'), 'tanish', 'admin');
+      // never attaches to a session — proves any connection can upload
+      const body = Buffer.from('E2E_UPLOAD_BODY_' + rand + '\n');
+      up.send({ t: 'upload-begin', id: 'up1', name: 'e2e-upload.txt', size: body.length });
+      up.send({ t: 'upload-chunk', id: 'up1', data: b64(body) });
+      up.send({ t: 'upload-end', id: 'up1' });
+      const done = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up1', 5000, 'uploaded reply');
+      uploadedPaths.push(done.path);
+      assert.match(done.path, /^\/tmp\/[a-z0-9]{5}-e2e-upload\.txt$/, `unexpected path ${done.path}`);
+      assert.equal(fs.readFileSync(done.path, 'utf8'), body.toString(), 'uploaded bytes differ from source');
+      up.ws.close();
+      await up.waitClose(5000, 'upload socket close');
+    });
+
+    await check('upload reassembles multiple chunks and sanitizes a hostile filename', async () => {
+      const up = track(new WSClient(wsUrl, cookieUser));
+      assertHelloShape(await up.nextText(5000, 'upload sanitize hello'), 'engineer-a', 'user');
+      const nasty = '../../etc/e2e nasty;$(rm -rf).txt'; // traversal + spaces + shell metachars
+      const body = Buffer.from('SANITIZE_BODY_' + rand + '_' + 'x'.repeat(50));
+      const half = Math.ceil(body.length / 2);
+      up.send({ t: 'upload-begin', id: 'up2', name: nasty, size: body.length });
+      up.send({ t: 'upload-chunk', id: 'up2', data: b64(body.subarray(0, half)) });
+      up.send({ t: 'upload-chunk', id: 'up2', data: b64(body.subarray(half)) });
+      up.send({ t: 'upload-end', id: 'up2' });
+      const a = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up2', 5000, 'sanitized uploaded');
+      uploadedPaths.push(a.path);
+      assert.match(a.path, /^\/tmp\/[a-z0-9]{5}-[A-Za-z0-9._-]+\.txt$/, `unsanitized path ${a.path}`);
+      assert.ok(!a.path.includes('..'), 'traversal survived sanitization');
+      assert.ok(!a.path.slice(5).includes('/'), 'path escaped /tmp');
+      assert.ok(!/[;$()\s]/.test(a.path), 'shell metacharacters survived sanitization');
+      assert.equal(fs.readFileSync(a.path, 'utf8'), body.toString(), 'reassembled bytes differ from source');
+      // same name again → a different random prefix, a different file
+      up.send({ t: 'upload-begin', id: 'up3', name: nasty, size: body.length });
+      up.send({ t: 'upload-chunk', id: 'up3', data: b64(body) });
+      up.send({ t: 'upload-end', id: 'up3' });
+      const b = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up3', 5000, 'second uploaded');
+      uploadedPaths.push(b.path);
+      assert.notEqual(a.path, b.path, 'identical names must get distinct random prefixes');
+      up.ws.close();
+      await up.waitClose(5000, 'sanitize socket close');
+    });
+
+    await check('upload over the 25 MB cap is rejected at begin', async () => {
+      const up = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await up.nextText(5000, 'upload cap hello'), 'tanish', 'admin');
+      up.send({ t: 'upload-begin', id: 'up4', name: 'huge.bin', size: 25 * 1024 * 1024 + 1 });
+      const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up4', 5000, 'oversize rejected');
+      assert.ok(typeof err.msg === 'string' && err.msg.length > 0, 'error must carry a message');
+      up.ws.close();
+      await up.waitClose(5000, 'cap socket close');
+    });
+
+    await check('upload aborts when chunk bytes exceed the declared size', async () => {
+      const up = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await up.nextText(5000, 'upload overflow hello'), 'tanish', 'admin');
+      up.send({ t: 'upload-begin', id: 'up5', name: 'liar.txt', size: 4 });
+      up.send({ t: 'upload-chunk', id: 'up5', data: b64(Buffer.from('way more than four bytes')) });
+      const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up5', 5000, 'overflow aborted');
+      assert.ok(err.msg, 'overflow error must carry a message');
+      up.ws.close();
+      await up.waitClose(5000, 'overflow socket close');
+    });
+
+    await check('upload-end with a byte-count mismatch is rejected', async () => {
+      const up = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await up.nextText(5000, 'upload incomplete hello'), 'tanish', 'admin');
+      const body = Buffer.from('12345678');
+      up.send({ t: 'upload-begin', id: 'up6', name: 'short.txt', size: body.length });
+      up.send({ t: 'upload-chunk', id: 'up6', data: b64(body.subarray(0, 3)) }); // 3 of 8
+      up.send({ t: 'upload-end', id: 'up6' });
+      const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up6', 5000, 'incomplete rejected');
+      assert.ok(err.msg, 'incomplete error must carry a message');
+      up.ws.close();
+      await up.waitClose(5000, 'incomplete socket close');
+    });
+
+    await check('a chunk with no matching upload is ignored', async () => {
+      const up = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await up.nextText(5000, 'stray chunk hello'), 'tanish', 'admin');
+      up.send({ t: 'upload-chunk', id: 'nope', data: b64(Buffer.from('orphan')) });
+      up.send({ t: 'upload-end', id: 'nope' });
+      // a valid upload right after must still succeed, and 'nope' must never resolve
+      const body = Buffer.from('AFTER_STRAY_' + rand);
+      up.send({ t: 'upload-begin', id: 'up7', name: 'ok.txt', size: body.length });
+      up.send({ t: 'upload-chunk', id: 'up7', data: b64(body) });
+      up.send({ t: 'upload-end', id: 'up7' });
+      const done = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up7', 5000, 'valid upload after stray');
+      uploadedPaths.push(done.path);
+      assert.ok(!up.texts.some((m) => (m.t === 'uploaded' || m.t === 'upload-error') && m.id === 'nope'),
+        'stray chunk/end produced a reply');
+      up.ws.close();
+      await up.waitClose(5000, 'stray socket close');
+    });
+
+    // ---------- Leaving a session returns to the lobby ----------
+    await check('leaving shared returns to the lobby but keeps the shared shell alive', async () => {
+      // state here: sa (tanish) holds control in shared, sb (engineer-a) is a shared viewer
+      sa.skipTexts();
+      sb.skipTexts();
+      const leftEpoch = sa.epoch;
+      const binBefore = sa.bin.length;
+      sa.send({ t: 'lobby' });
+      const m = await sa.waitText((x) => x.t === 'mode' && x.mode === 'lobby', 5000, 'sa mode lobby');
+      assert.ok(m.epoch > leftEpoch, 'leaving must bump the epoch');
+      assert.ok(!('bufferBytes' in m) && !('cols' in m), 'lobby frame carries epoch only');
+      // sa held control → released; the remaining viewer sees it vacated
+      await sb.waitText((x) => x.t === 'state' && x.controller === null, 5000, 'control released on leave');
+      await sleep(500);
+      assert.equal(sa.bin.length, binBefore, 'no PTY output/replay may follow the drop to the lobby');
+      // the shared shell is untouched: sb takes the vacated control and its command runs
+      sb.send({ t: 'take' });
+      await sb.waitText((x) => x.t === 'state' && x.controller === 'engineer-a', 5000, 'sb takes vacated control');
+      const off = sb.binBytes;
+      sb.send({ t: 'input', data: `echo LEFT_SHARED_AL''IVE_${rand}\r`, e: sb.epoch });
+      await sb.waitBinContains(`LEFT_SHARED_ALIVE_${rand}`, off, 8000, 'shared shell still runs after a viewer left');
+      // sa, now in the lobby, re-attaches; the replay carries sb's post-leave marker
+      const back = await sa.attachShared(100, 30);
+      assert.ok(back.bufferBytes > 0 && back.replay.includes(`LEFT_SHARED_ALIVE_${rand}`),
+        'lobby→shared replay missing output produced while away');
+    });
+
+    await check('leaving a split from the panel kills the shell and returns to the lobby', async () => {
+      const lx = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await lx.nextText(5000, 'leave-split hello'), 'tanish', 'admin');
+      lx.send({ t: 'split', cols: 100, rows: 30 });
+      await lx.waitText((x) => x.t === 'mode' && x.mode === 'split', 8000, 'mode split before leave');
+      lx.send({ t: 'input', data: 'echo "PID:$$:DIP"\r', e: lx.epoch });
+      let pid = null;
+      const parseEnd = Date.now() + 10000;
+      while (Date.now() < parseEnd) {
+        const mm = lx.binAll().toString('utf8').match(/PID:(\d+):DIP/);
+        if (mm) { pid = Number(mm[1]); break; }
+        await sleep(100);
+      }
+      assert.ok(Number.isInteger(pid) && pid > 1, `could not parse split pid (got ${pid})`);
+      const textCount = lx.texts.length;
+      lx.send({ t: 'lobby' });
+      const m = await lx.waitText((x) => x.t === 'mode' && x.mode === 'lobby', 8000, 'mode lobby after leaving split');
+      assert.ok(!('cols' in m) && !('bufferBytes' in m), 'lobby frame carries epoch only');
+      assert.ok(!lx.texts.slice(textCount).some((x) => x.t === 'splitExited'),
+        'leaving intentionally must not emit splitExited');
+      let gone = false;
+      const killEnd = Date.now() + 6000;
+      while (Date.now() < killEnd) {
+        try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') gone = true; break; }
+        await sleep(200);
+      }
+      assert.ok(gone, `split shell pid ${pid} survived leaving to the lobby`);
+      lx.ws.close();
+      await lx.waitClose(5000, 'leave-split socket close');
+    });
+
     console.log(`# ${checksPassed} checks passed`);
   } catch (e) {
     process.exitCode = 1;
@@ -719,6 +877,7 @@ async function main() {
       if (err) console.error(`--- server stderr ---\n${err}`);
     }
   } finally {
+    for (const p of uploadedPaths) { try { fs.unlinkSync(p); } catch { /* already gone */ } }
     for (const c of clients) c.terminate();
     if (server && server.child.exitCode === null) {
       server.child.kill('SIGTERM');

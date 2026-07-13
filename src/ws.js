@@ -1,8 +1,36 @@
 import { WebSocketServer } from 'ws';
+import { writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import path from 'node:path';
 import { spawnRawPty } from './pty.js';
 
 const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
+
+// File uploads land here on the host, named "<5 random alnum>-<safe original>".
+// /tmp is deliberate (spec), not os.tmpdir() — the user references these paths in
+// a shell/CLI and /tmp is predictable; the OS reaps it, so we never delete them.
+const UPLOAD_DIR = '/tmp';
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const UPLOAD_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+function randomPrefix() {
+  const b = randomBytes(5);
+  let s = '';
+  for (let i = 0; i < 5; i++) s += UPLOAD_ALPHABET[b[i] % 36];
+  return s;
+}
+
+// Reduce an arbitrary client-supplied name to a basename in [A-Za-z0-9._-] with
+// no leading dots. This both blocks traversal / hidden-file writes AND means the
+// final path needs no shell quoting — that's what lets the client type it
+// straight into the PTY. Extension is preserved (Claude Code keys image detection
+// off it). Empty result falls back to "file".
+function safeName(name) {
+  const base = String(name || '').split(/[\\/]/).pop() || '';
+  const clean = base.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 100);
+  return clean || 'file';
+}
 
 export function attachWebSocket(httpServer, { config, session, control, authenticate }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
@@ -271,6 +299,22 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
         killSplit(meta); // no-op from the lobby
         returnToShared(ws, meta, msg.cols, msg.rows);
         break;
+      case 'lobby': {
+        // Detach this viewer back to the chooser. The shared PTY is server-owned
+        // and keeps running for everyone else — leaving only stops this socket
+        // viewing it; a split shell is ephemeral, so leaving one kills it.
+        if (meta.mode === 'lobby') break;
+        killSplit(meta); // no-op unless split
+        if (control.isController(meta.username)) control.release(meta.username, false);
+        control.cancelRequest(meta.username);
+        const wasShared = meta.mode === 'shared';
+        meta.mode = 'lobby';
+        meta.natural = null; // no longer part of the shared min-grid
+        meta.epoch++; // input/resize in flight for the old session must not apply
+        if (wasShared) recomputeGrid(); // this member may have been the grid minimum
+        send(ws, { t: 'mode', mode: 'lobby', epoch: meta.epoch });
+        break;
+      }
       case 'grant':
         if (typeof msg.to !== 'string' || !control.grant(meta.username, msg.to, isAdmin)) {
           send(ws, { t: 'error', msg: 'cannot grant' });
@@ -300,6 +344,52 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
           s.close(4000, 'kicked');
         }
         break;
+      // ---- chunked file upload (any mode; the file just lands in /tmp) ----
+      // Chunks are base64 in JSON text frames so each stays under the WS
+      // maxPayload; the client reassembles nothing — the server does, capping
+      // total bytes as they arrive. One upload per socket at a time.
+      case 'upload-begin': {
+        const size = Number(msg.size);
+        if (typeof msg.id !== 'string' || !msg.id) {
+          return send(ws, { t: 'upload-error', id: msg.id, msg: 'bad upload id' });
+        }
+        if (!Number.isInteger(size) || size <= 0 || size > MAX_UPLOAD_BYTES) {
+          return send(ws, { t: 'upload-error', id: msg.id, msg: 'file too large or invalid size' });
+        }
+        meta.upload = { id: msg.id, name: safeName(msg.name), size, received: 0, chunks: [] };
+        break;
+      }
+      case 'upload-chunk': {
+        const u = meta.upload;
+        if (!u || u.id !== msg.id || typeof msg.data !== 'string') break; // stale/orphan: drop
+        const buf = Buffer.from(msg.data, 'base64');
+        u.received += buf.length;
+        if (u.received > u.size) {
+          meta.upload = null;
+          return send(ws, { t: 'upload-error', id: u.id, msg: 'sent more bytes than declared' });
+        }
+        u.chunks.push(buf);
+        break;
+      }
+      case 'upload-end': {
+        const u = meta.upload;
+        if (!u || u.id !== msg.id) break;
+        meta.upload = null;
+        if (u.received !== u.size) {
+          return send(ws, { t: 'upload-error', id: u.id, msg: 'incomplete transfer' });
+        }
+        const dest = path.join(UPLOAD_DIR, randomPrefix() + '-' + u.name);
+        if (dest.slice(0, UPLOAD_DIR.length + 1) !== UPLOAD_DIR + '/') { // defense in depth
+          return send(ws, { t: 'upload-error', id: u.id, msg: 'refusing to write outside ' + UPLOAD_DIR });
+        }
+        const data = Buffer.concat(u.chunks, u.received);
+        // 0o600: the uploader owns the file; treat it like anything else on a box
+        // you have shell access to
+        writeFile(dest, data, { mode: 0o600 })
+          .then(() => send(ws, { t: 'uploaded', id: u.id, path: dest }))
+          .catch((e) => send(ws, { t: 'upload-error', id: u.id, msg: e.message }));
+        break;
+      }
       case 'hb':
         break; // lastSeen already updated on receipt
       default:
@@ -319,6 +409,7 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
       natural: null, // this member's viewport-fitting grid; feeds the shared min-grid
       splitPty: null,
       splitSubs: [],
+      upload: null, // in-flight chunked file upload: { id, name, size, received, chunks }
     };
     // No control bookkeeping at connect: control is granted at shared-attach,
     // and a reconnecting controller's stale reservation is preserved only by an

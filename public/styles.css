@@ -241,6 +241,34 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 }
 #overlay-msg { margin: 0 0 14px; }
 
+/* upload modal: above the panel/bars, below the disconnect overlay */
+#upload-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 38;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 17, 27, .82);
+}
+#upload-modal .overlay-card { max-width: min(360px, 92vw); }
+#upload-modal h1 { margin: 0 0 12px; font-size: 18px; color: var(--mauve); }
+.upload-hint { margin: 0 0 16px; font-size: 12px; line-height: 1.5; color: var(--overlay2); }
+#upload-modal .upload-cancel { margin-top: 16px; }
+#panel code, .upload-hint code {
+  background: var(--crust);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text);
+}
+#panel kbd {
+  background: var(--surface0);
+  border: 1px solid var(--overlay0);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
 #toast {
   position: fixed;
   right: 16px;

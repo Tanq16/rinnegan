@@ -31,6 +31,8 @@
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
   const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
   const RESIZE_MS = 200; // debounce for viewport-driven grid reports/resizes
+  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // mirrors the server cap
+  const UPLOAD_CHUNK = 512 * 1024; // raw bytes/chunk; base64 stays under the WS 1MB maxPayload
   const KEY_SEQS = { 'esc': '\x1b', 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a' };
   // US-layout [unshifted, shifted] chars per ev.code, for Alt-as-Escape (M-= etc.)
   const ALT_BASE = {
@@ -48,7 +50,7 @@
     pUser: $('p-user'), pViewers: $('p-viewers'), pController: $('p-controller'),
     pPending: $('p-pending'), pMode: $('p-mode'), pStatus: $('p-status'),
     takeBtn: $('take-btn'), releaseBtn: $('release-btn'),
-    pSession: $('p-session'), sessionBtn: $('session-btn'), sessionBadge: $('session-badge'),
+    pSession: $('p-session'), sessionBtn: $('session-btn'), leaveBtn: $('leave-btn'), sessionBadge: $('session-badge'),
     altEsc: $('alt-esc'),
     adminSection: $('admin-section'), modeSelect: $('mode-select'),
     restartBtn: $('restart-btn'), kickBtn: $('kick-btn'),
@@ -58,6 +60,9 @@
     overlay: $('overlay'), overlayMsg: $('overlay-msg'), reconnectBtn: $('reconnect-btn'),
     chooser: $('chooser'), chooserNote: $('chooser-note'), chooserInfo: $('chooser-info'),
     chooseShared: $('choose-shared'), chooseSplit: $('choose-split'),
+    uploadOpen: $('upload-open'), uploadModal: $('upload-modal'),
+    uploadClipboard: $('upload-clipboard'), uploadPick: $('upload-pick'),
+    uploadCancel: $('upload-cancel'), uploadFile: $('upload-file'),
     toast: $('toast'),
   };
 
@@ -81,6 +86,9 @@
   let replayLeft = 0; // bytes of buffer replay still expected after a mode frame
   let replayGen = 0; // invalidates stale write-callbacks from a superseded replay
   let clipboardArmed = false; // OSC 52 honored only for live output, not replay
+  let uploadSeq = 0; // per-connection upload id counter
+  let uploading = false; // one upload at a time (server enforces too)
+  let uploadTimer = null; // resets `uploading` if the server never answers
 
   const isAdmin = () => me.role === 'admin';
   const isController = () => me.username !== null && state.controller === me.username;
@@ -184,9 +192,39 @@
         els.endedBar.hidden = false;
         els.endedRestart.hidden = !isAdmin();
         break;
+      case 'uploaded':
+        onUploaded(msg.path);
+        break;
+      case 'upload-error':
+        uploading = false;
+        clearTimeout(uploadTimer);
+        toast('upload failed: ' + msg.msg);
+        break;
       case 'error':
         toast(msg.msg);
         break;
+    }
+  }
+
+  // The file is on the host at msg.path. If this connection can type into a
+  // terminal (own split, or shared while holding control), insert the path at
+  // the cursor with a trailing space and NO Enter — so Claude Code picks it up
+  // and the user can add a prompt first. Otherwise (lobby, or a shared viewer
+  // without control) there is nowhere to type, so surface the path and copy it.
+  function onUploaded(p) {
+    uploading = false;
+    clearTimeout(uploadTimer);
+    const canType = sess === 'split' || (sess === 'shared' && isController());
+    if (canType) {
+      sendInput(p + ' ');
+      if (term) term.focus();
+      toast('uploaded — inserted ' + p);
+    } else {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(p).catch(() => {});
+      }
+      const why = sess === 'lobby' ? '' : ' (take control to insert)';
+      toast('uploaded to ' + p + ' — copied' + why);
     }
   }
 
@@ -419,6 +457,7 @@
     els.pSession.dataset.mode = sess;
     els.sessionBtn.hidden = sess === 'lobby'; // the chooser owns lobby transitions
     els.sessionBtn.textContent = split ? 'Return to shared' : 'Split session';
+    els.leaveBtn.hidden = sess === 'lobby'; // already at the chooser
     els.sessionBadge.hidden = !shared;
 
     // split = your own shell, lobby = no session: input gating is shared-only
@@ -485,6 +524,74 @@
     els.chooser.hidden = true;
   }
 
+  function openUploadModal() {
+    els.uploadModal.hidden = false;
+    els.uploadPick.focus();
+  }
+
+  function closeUploadModal() {
+    els.uploadModal.hidden = true;
+  }
+
+  // --- file upload ---
+
+  // btoa over a large typed array blows the argument limit, so build the binary
+  // string in fixed windows first (each byte is 0..255, so Latin-1 is exact).
+  function bytesToB64(bytes) {
+    let bin = '';
+    const N = 0x8000;
+    for (let i = 0; i < bytes.length; i += N) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + N));
+    }
+    return btoa(bin);
+  }
+
+  async function uploadBlob(blob, filename) {
+    if (uploading) return toast('an upload is already in progress');
+    if (!blob || blob.size === 0) return toast('nothing to upload');
+    if (blob.size > MAX_UPLOAD_BYTES) return toast('file too large (max 25 MB)');
+    if (!ws || ws.readyState !== WebSocket.OPEN) return toast('not connected');
+    uploading = true;
+    const id = 'u' + (++uploadSeq);
+    try {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      send({ t: 'upload-begin', id, name: filename, size: bytes.length });
+      for (let off = 0; off < bytes.length; off += UPLOAD_CHUNK) {
+        send({ t: 'upload-chunk', id, data: bytesToB64(bytes.subarray(off, off + UPLOAD_CHUNK)) });
+      }
+      send({ t: 'upload-end', id });
+      toast('uploading ' + filename + '…');
+      clearTimeout(uploadTimer);
+      uploadTimer = setTimeout(() => {
+        if (uploading) { uploading = false; toast('upload timed out'); }
+      }, 30000);
+    } catch (e) {
+      uploading = false;
+      toast('upload failed: ' + (e && e.message || e));
+    }
+  }
+
+  async function uploadFromClipboard() {
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      return toast('clipboard read needs HTTPS — use Choose file…');
+    }
+    let items;
+    try {
+      items = await navigator.clipboard.read();
+    } catch (e) {
+      return toast('clipboard blocked: ' + (e && e.message || e));
+    }
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (type) {
+        const blob = await item.getType(type);
+        const ext = (type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+        return uploadBlob(blob, 'clipboard-image.' + ext);
+      }
+    }
+    toast('no image found in the clipboard');
+  }
+
   // --- wiring ---
 
   function init() {
@@ -517,6 +624,9 @@
       }
       if (term) term.focus();
     });
+    // leave the current session for the chooser: shared just detaches (the shell
+    // lives on server-side); split ends the split shell, same as any exit
+    els.leaveBtn.addEventListener('click', () => send({ t: 'lobby' }));
 
     document.querySelectorAll('button.seq').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -539,6 +649,20 @@
       if (state.pending) send({ t: 'grant', to: state.pending });
     });
     els.denyBtn.addEventListener('click', () => send({ t: 'deny' }));
+
+    els.uploadOpen.addEventListener('click', openUploadModal);
+    els.uploadCancel.addEventListener('click', closeUploadModal);
+    // click the backdrop or press Escape to dismiss
+    els.uploadModal.addEventListener('click', (e) => { if (e.target === els.uploadModal) closeUploadModal(); });
+    els.uploadModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUploadModal(); });
+    // read the clipboard within the click's gesture, then close the modal
+    els.uploadClipboard.addEventListener('click', () => { uploadFromClipboard(); closeUploadModal(); });
+    els.uploadPick.addEventListener('click', () => els.uploadFile.click());
+    els.uploadFile.addEventListener('change', () => {
+      const f = els.uploadFile.files && els.uploadFile.files[0];
+      els.uploadFile.value = ''; // allow re-picking the same file
+      if (f) { closeUploadModal(); uploadBlob(f, f.name); }
+    });
 
     els.reconnectBtn.addEventListener('click', () => {
       hideOverlay();

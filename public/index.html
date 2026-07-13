@@ -35,9 +35,20 @@
       <h3>Session <span id="p-session">shared</span></h3>
       <div class="row">
         <button id="session-btn" type="button">Split session</button>
+        <button id="leave-btn" type="button" title="Detach and return to the session chooser">Leave session</button>
       </div>
       <p class="hint">Split is your own shell on the same box &mdash; not a sandbox &mdash;
         and it ends when you leave. Start tmux inside it to keep work between visits.</p>
+    </section>
+
+    <section id="upload-section">
+      <h3>Files</h3>
+      <div class="row">
+        <button id="upload-open" type="button">Upload file&hellip;</button>
+      </div>
+      <p class="hint">Sends a file to <code>/tmp</code> on the host and drops its path
+        into your terminal &mdash; e.g. to paste a clipboard image into a CLI like
+        Claude Code, where <kbd>Ctrl-V</kbd> can't reach across the browser.</p>
     </section>
 
     <section>
@@ -89,6 +100,21 @@
           title="Your own shell on the same box &mdash; not a sandbox &mdash; it ends when you leave">Split session</button>
       </div>
       <p id="chooser-info"></p>
+    </div>
+  </div>
+
+  <div id="upload-modal" hidden>
+    <div class="overlay-card">
+      <h1>Upload a file</h1>
+      <p class="upload-hint">Transferred to <code>/tmp</code> on the host with a short
+        random prefix; the path is inserted into your terminal.</p>
+      <div class="chooser-buttons">
+        <button id="upload-clipboard" type="button"
+          title="Reads an image from your clipboard (needs HTTPS)">From clipboard</button>
+        <button id="upload-pick" type="button">Choose file&hellip;</button>
+      </div>
+      <button id="upload-cancel" type="button" class="upload-cancel">Cancel</button>
+      <input id="upload-file" type="file" hidden>
     </div>
   </div>
 
