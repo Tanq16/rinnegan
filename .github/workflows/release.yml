@@ -17,23 +17,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # linux-x64: standard GitHub-hosted x64 Ubuntu runner.
           - os: linux
             arch: x64
             runner: ubuntu-24.04
-          # linux-arm64: GitHub-hosted native arm64 Ubuntu runner (free for public repos).
           - os: linux
             arch: arm64
             runner: ubuntu-24.04-arm
-          # darwin-arm64: Apple Silicon runner. Unannotated macos-* labels are arm64.
+          # Unannotated macos-* labels are arm64.
           - os: darwin
             arch: arm64
             runner: macos-14
-          # darwin-x64: native Intel macOS runner. The macos-13 image is being retired
-          # (fully unsupported Dec 2025), so we use macos-15-intel, the current and final
-          # GitHub-hosted x86_64 macOS image (available through Aug 2027). Building natively
-          # on Intel is more reliable than cross-compiling node-pty's native addon from arm64,
-          # so we prefer the native runner and avoid any --arch cross-build hacks.
+          # Native Intel runner avoids cross-compiling node-pty's native addon from arm64.
           - os: darwin
             arch: x64
             runner: macos-15-intel
@@ -66,9 +60,7 @@ jobs:
 
           cd "$APP_DIR"
 
-          # Start with a fully scrubbed environment: PATH deliberately EXCLUDES any node,
-          # so if the launcher does not use the bundled runtime/bin/node the server cannot start.
-          # env -i clears everything; we re-add only HOME, a minimal PATH, and TERM.
+          # Scrubbed PATH deliberately excludes node so startup proves the bundled runtime is used.
           env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
             ./bin/rinnegan serve --config ./config.json > server.log 2>&1 &
           SERVER_PID=$!
@@ -79,13 +71,12 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Confirm the bundled node truly has no fallback: it must NOT be on the scrubbed PATH.
+          # Confirm node is not on the scrubbed PATH, else the test cannot prove self-containment.
           if env -i PATH=/usr/bin:/bin command -v node >/dev/null 2>&1; then
             echo "unexpected: node found on scrubbed PATH; smoke test cannot prove self-containment"
             exit 1
           fi
 
-          # Poll for the login page.
           LOGIN_CODE=""
           for i in $(seq 1 30); do
             if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -116,14 +107,11 @@ jobs:
           fi
           echo "GET / -> 302 OK"
 
-          # HTTPS via bundled Caddy: the --https server ALSO binds 8442, so stop the
-          # HTTP-only server first to free the port.
+          # The --https server also binds 8442, so stop the HTTP-only server first to free the port.
           kill "$SERVER_PID" 2>/dev/null || true
           wait "$SERVER_PID" 2>/dev/null || true
 
-          # Start the full HTTPS stack (rinnegan on 8442 + bundled Caddy on 8443)
-          # with the same scrubbed environment. Caddy is invoked by absolute path via
-          # RINNEGAN_ROOT, so the scrubbed PATH does not affect it.
+          # Caddy is invoked by absolute path via RINNEGAN_ROOT, so the scrubbed PATH does not affect it.
           env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
             ./bin/rinnegan serve --https --config ./config.json > https.log 2>&1 &
           HTTPS_PID=$!
@@ -136,7 +124,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Poll for the login page over TLS (-k accepts the self-signed cert).
+          # -k accepts the self-signed cert.
           HTTPS_LOGIN_CODE=""
           for i in $(seq 1 30); do
             if ! kill -0 "$HTTPS_PID" 2>/dev/null; then

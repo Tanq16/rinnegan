@@ -140,7 +140,8 @@ function serve(configPath, flags = {}) {
   const state = loadState(cfg.stateFile);
   // per-boot signing secret: sessions do not survive restarts (spec persists only mode)
   const secret = randomBytes(32).toString('base64');
-  const initialMode = state.mode ?? cfg.control.mode;
+  const persisted = state.mode;
+  const initialMode = (persisted === 'soft' || persisted === 'fast') ? persisted : cfg.control.mode;
 
   const control = createControl({
     mode: initialMode,
@@ -187,14 +188,16 @@ function serve(configPath, flags = {}) {
     process.exit(1);
   }
 
+  // hoisted so an abnormal server exit tears Caddy down instead of orphaning the public :8443 listener
+  let caddy;
   server.on('error', (e) => {
     process.stderr.write(`server error: ${e.message}\n`);
+    try { caddy?.kill('SIGTERM'); } catch {}
     process.exit(1);
   });
   server.listen(cfg.listen.port, cfg.listen.host, () => {
     console.log(`rinnegan listening on http://${cfg.listen.host}:${server.address().port}`);
     if (https) {
-      let caddy;
       try { caddy = startCaddy(process.env.RINNEGAN_ROOT || null, flags); }
       catch (e) { process.stderr.write(`${e.message}\n`); process.exit(1); }
       console.log('rinnegan HTTPS front (Caddy) starting on https://0.0.0.0:8443 (self-signed)');

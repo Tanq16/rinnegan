@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  // Catppuccin Mocha — exact values matching the team's kitty config (see README).
+  // Catppuccin Mocha — values must match the team's kitty config (see README).
   const THEME = {
     background: '#1e1e2e',
     foreground: '#cdd6f4',
@@ -76,10 +76,8 @@
   let grid = { cols: 120, rows: 36 };
   let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
   let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
-  let lastSess = null; // sess before a reconnect; null on page load so a fresh
-  // load always lands at the chooser, while a dropped shared WS rejoins silently
-  let epoch = 0; // session epoch from hello/mode frames, echoed in input/resize
-  // so the server drops keystrokes in flight across a session switch
+  let lastSess = null; // null on page load lands at chooser; a dropped shared WS rejoins silently
+  let epoch = 0; // echoed in input/resize so the server drops keystrokes in flight across a session switch
   let splitGrid = { cols: 0, rows: 0 }; // viewport-derived grid while split
   let resizeTimer = null;
   let splitEnded = false; // a splitExited arrived; the lobby chooser notes it
@@ -101,8 +99,6 @@
     send({ t: 'input', data, e: epoch });
   };
 
-  // --- websocket lifecycle ---
-
   function connect() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -122,8 +118,7 @@
     ws = null;
     if (ev.code === 4401) { location.href = '/login'; return; }
     if (ev.code === 4000) {
-      // an admin kick is deliberate, not a network blip: the Reconnect button
-      // must land at the chooser, never silently rejoin the shared session
+      // an admin kick must land at the chooser on Reconnect, never silently rejoin shared
       lastSess = null;
       setStatus('disconnected');
       showOverlay('Disconnected by admin.');
@@ -142,9 +137,7 @@
         if (replayLeft > 0) {
           replayLeft -= bytes.byteLength;
           if (replayLeft <= 0) {
-            // write callbacks fire after the chunk is parsed, so this arms the
-            // clipboard only once every replayed byte has gone through the
-            // parser — and only if no newer replay has been armed meanwhile
+            // arm OSC 52 only after every replayed byte is parsed, and only if no newer replay superseded this one
             const g = replayGen;
             term.write(bytes, () => { if (g === replayGen) clipboardArmed = true; });
           } else {
@@ -173,7 +166,6 @@
         onMode(msg);
         break;
       case 'splitExited':
-        // the lobby mode message that follows lands on the chooser
         splitEnded = true;
         toast('shell exited');
         break;
@@ -206,11 +198,7 @@
     }
   }
 
-  // The file is on the host at msg.path. If this connection can type into a
-  // terminal (own split, or shared while holding control), insert the path at
-  // the cursor with a trailing space and NO Enter — so Claude Code picks it up
-  // and the user can add a prompt first. Otherwise (lobby, or a shared viewer
-  // without control) there is nowhere to type, so surface the path and copy it.
+  // Insert the uploaded path with a trailing space and NO Enter so the user can add a prompt; if there's nowhere to type, copy it instead.
   function onUploaded(p) {
     uploading = false;
     clearTimeout(uploadTimer);
@@ -228,8 +216,7 @@
     }
   }
 
-  // A buffer replay follows the shared mode message (attach/return-to-shared):
-  // suppress OSC 52 until it is consumed (see the binary branch of onMessage).
+  // Suppress OSC 52 until the shared replay is consumed (see the binary branch of onMessage).
   function armReplay(bufferBytes) {
     replayGen++; // a still-parsing older replay must not re-arm the clipboard
     replayLeft = bufferBytes;
@@ -240,7 +227,7 @@
     me = msg.you;
     grid = { cols: msg.size.cols, rows: msg.size.rows };
     state = msg.state;
-    sess = 'lobby'; // connections land in the lobby; no replay follows hello
+    sess = 'lobby'; // no replay follows hello
     epoch = msg.epoch;
     clearTimeout(resizeTimer);
     armReplay(0); // a replay interrupted by the reconnect must stay disarmed
@@ -254,8 +241,7 @@
       term.reset(); // the shared mode reply's replay (if any) rebuilds the grid
     }
     if (lastSess === 'shared') {
-      // silent rejoin after an automatic reconnect (not a page load): the mode
-      // reply + replay restores the terminal without a trip through the chooser
+      // silent rejoin after an auto-reconnect: the mode reply + replay restores the terminal, skipping the chooser
       const want = computeNatural() || {}; // absent size: server uses config
       send({ t: 'shared', cols: want.cols, rows: want.rows });
       hideChooser();
@@ -300,8 +286,6 @@
     renderPanel();
   }
 
-  // --- terminal ---
-
   function createTerminal() {
     term = new Terminal({
       cols: grid.cols,
@@ -318,18 +302,11 @@
       theme: THEME,
     });
     term.open(els.terminal);
-    // v1 theme is locked: swallow OSC 10/11/12 color sets from the PTY stream /
-    // replay buffer so nothing run in a shell can recolor the terminal. 10/11
-    // matter too: this xterm build spills extra OSC 10/11 params into the next
-    // special-color slots (fg;bg;cursor), a side door to the cursor color.
-    // Queries ("?") fall through so TUIs can still detect the theme colors.
+    // Swallow OSC 10/11/12 color-set escapes so a shell can't recolor the terminal (a side door to the cursor color); queries ("?") fall through so TUIs can still detect theme colors.
     for (const color of [10, 11, 12]) {
       term.parser.registerOscHandler(color, (data) => data !== '?');
     }
-    // kitty never blinks (cursor_blink_interval 0): honor DECSCUSR shapes but
-    // always strip the blink bit; 0 restores the kitty default (steady beam).
-    // The shell re-asserts blinking-bar (\e[5 q) at every prompt (rc-base.zsh),
-    // so without this the cursor blinks forever despite cursorBlink: false.
+    // Honor DECSCUSR shapes but always strip the blink bit: the shell re-asserts blinking-bar (\e[5 q) each prompt, so cursorBlink:false alone isn't enough.
     term.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, (params) => {
       const p = typeof params[0] === 'number' ? params[0] : 0;
       if (p <= 6) {
@@ -338,10 +315,7 @@
       }
       return true; // handled: never let the default handler enable blinking
     });
-    // OSC 52 copy (tmux load-buffer -w, remote shells): set the local clipboard.
-    // Only live output is honored (see clipboardArmed) so reconnect replays don't
-    // re-copy stale data; the "?" read form is consumed unanswered — answering
-    // would let anything in the shared shell read every viewer's clipboard.
+    // OSC 52: honor WRITE/copy only (live output, see clipboardArmed); the "?" read form is consumed unanswered — answering would leak every viewer's clipboard to the shared shell.
     term.parser.registerOscHandler(52, (data) => {
       const payload = data.slice(data.indexOf(';') + 1);
       if (!clipboardArmed || !payload || payload === '?') return true;
@@ -364,17 +338,14 @@
     const letter = /^Key([A-Z])$/.exec(ev.code);
     if (letter) k = ev.shiftKey ? letter[1] : letter[1].toLowerCase();
     else if (ALT_BASE[ev.code]) k = ALT_BASE[ev.code][ev.shiftKey ? 1 : 0];
-    // anything else (arrows, Enter, Backspace…): xterm's macOptionIsMeta path
-    // already emits correct ESC-/CSI-modified sequences from stable keyCodes
+    // anything else (arrows, Enter, Backspace…): xterm's macOptionIsMeta path already emits correct sequences
     if (!k) return true;
     ev.preventDefault(); // never let the composed char reach xterm or the page
     sendInput('\x1b' + k);
     return false;
   }
 
-  // Natural grid: what fits this viewport at DEFAULT_FONT, from the #probe's
-  // true text metrics. Reported to the server on shared attach/resize (the
-  // shared grid is the elementwise min over members) and used directly in split.
+  // Natural grid: cols/rows that fit this viewport at DEFAULT_FONT, from the #probe's text metrics.
   function computeNatural() {
     const probe = els.probe.getBoundingClientRect();
     if (!probe.width || !probe.height) return null;
@@ -386,27 +357,19 @@
     };
   }
 
-  // Shared grid comes from the server ({t:'size'}/{t:'mode'}) — never resize it
-  // locally. Render at DEFAULT_FONT, letterboxed: the remainder stays painted in
-  // the terminal background (see #stage), the same way kitty pads a window that
-  // isn't an exact multiple of the cell. If the server grid transiently does not
-  // fit (window shrank/zoomed before the server applied our natural report),
-  // step the font down just enough to fit; the next call restores DEFAULT_FONT
-  // as soon as it fits again.
+  // Shared grid comes from the server — never resize it locally; render at DEFAULT_FONT letterboxed, stepping the font down only if the server grid transiently doesn't fit.
   function fitShared() {
     if (!term || sess !== 'shared') return;
     const availW = els.stage.clientWidth - 16; // 2 × #stage padding
     const availH = els.stage.clientHeight - 16;
     const probe = els.probe.getBoundingClientRect();
     if (!probe.width || !probe.height) return;
-    // probe metrics: cell px per 1px of font-size; fractional sizes render fine
     const cw = probe.width / 10 / PROBE_FONT_PX;
     const ch = probe.height / PROBE_FONT_PX;
     let f = Math.min(DEFAULT_FONT, availW / (grid.cols * cw), availH / (grid.rows * ch));
     f = Math.max(8, f);
     term.options.fontSize = f;
-    // xterm's real cell metrics differ slightly from the probe's: step down
-    // past any device-px rounding until the rendered grid actually fits
+    // xterm's cell metrics differ slightly from the probe's: step down past device-px rounding until it actually fits
     const screen = els.terminal.querySelector('.xterm-screen');
     if (screen) {
       for (let i = 0; i < 40 && f > 8; i++, f -= 0.05) {
@@ -417,9 +380,7 @@
     }
   }
 
-  // Debounced viewport follow-up, both modes: split resizes its own PTY; shared
-  // reports its natural grid (any member, no gate) and the server answers with
-  // {t:'size'} only if the min-grid moved.
+  // Debounced viewport follow-up: split resizes its own PTY; shared reports its natural grid and the server answers only if the min-grid moved.
   function refitViewport() {
     if (!term) return;
     const want = computeNatural();
@@ -431,18 +392,15 @@
         send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch }); // own pty, no gate
       }
     } else if (sess === 'shared') {
-      send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch }); // natural-size report
-      fitShared(); // re-letterbox (or fall back) while the report is in flight
+      send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch });
+      fitShared(); // re-letterbox while the report is in flight
     }
-    // lobby: nothing to size
   }
 
   function onViewportResize() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(refitViewport, RESIZE_MS);
   }
-
-  // --- panel / ui state ---
 
   function renderPanel() {
     els.pUser.textContent = me.username ? me.username + ' (' + me.role + ')' : '–';
@@ -460,7 +418,7 @@
     els.leaveBtn.hidden = sess === 'lobby'; // already at the chooser
     els.sessionBadge.hidden = !shared;
 
-    // split = your own shell, lobby = no session: input gating is shared-only
+    // input gating is shared-only: split is your own shell, lobby has no session
     const ctrl = isController();
     document.body.classList.toggle('readonly', shared && !ctrl);
 
@@ -483,7 +441,6 @@
     els.modeSelect.value = state.mode;
     els.endedRestart.hidden = !isAdmin();
 
-    // the chooser's subtle status line stays fresh while sitting in the lobby
     els.chooserInfo.textContent = state.viewers + (state.viewers === 1 ? ' viewer' : ' viewers')
       + ' · controller: ' + (state.controller ?? 'none');
 
@@ -533,10 +490,7 @@
     els.uploadModal.hidden = true;
   }
 
-  // --- file upload ---
-
-  // btoa over a large typed array blows the argument limit, so build the binary
-  // string in fixed windows first (each byte is 0..255, so Latin-1 is exact).
+  // btoa over a large typed array blows the argument limit, so encode in fixed windows (each byte 0..255, Latin-1 is exact).
   function bytesToB64(bytes) {
     let bin = '';
     const N = 0x8000;
@@ -592,8 +546,6 @@
     toast('no image found in the clipboard');
   }
 
-  // --- wiring ---
-
   function init() {
     els.toggle.addEventListener('click', () => {
       const open = els.panel.classList.toggle('open');
@@ -624,8 +576,7 @@
       }
       if (term) term.focus();
     });
-    // leave the current session for the chooser: shared just detaches (the shell
-    // lives on server-side); split ends the split shell, same as any exit
+    // leaving: shared just detaches (the shell lives on server-side); split ends the split shell
     els.leaveBtn.addEventListener('click', () => send({ t: 'lobby' }));
 
     document.querySelectorAll('button.seq').forEach((btn) => {
@@ -652,7 +603,6 @@
 
     els.uploadOpen.addEventListener('click', openUploadModal);
     els.uploadCancel.addEventListener('click', closeUploadModal);
-    // click the backdrop or press Escape to dismiss
     els.uploadModal.addEventListener('click', (e) => { if (e.target === els.uploadModal) closeUploadModal(); });
     els.uploadModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUploadModal(); });
     // read the clipboard within the click's gesture, then close the modal

@@ -1,13 +1,9 @@
 #!/bin/sh
-# rinnegan launcher: runs the bundled Node runtime against the bundled CLI.
-# Fully self-contained -- never relies on any Node found in PATH.
+# rinnegan launcher: runs the bundled Node runtime, never a Node found in PATH.
 set -e
 
-# --- Resolve this script's own real path, following symlinks (POSIX sh) ---
-# We avoid `readlink -f` / `realpath` since they are not portable across
-# macOS, BusyBox, and coreutils. Instead we walk the symlink chain by hand.
+# Walk the symlink chain by hand: readlink -f / realpath are not portable across macOS, BusyBox, and coreutils.
 SELF=$0
-# If invoked via PATH without a slash, locate it via command -v.
 case $SELF in
   */*) ;;
   *)
@@ -17,42 +13,31 @@ case $SELF in
     fi
     ;;
 esac
-# Follow symlinks until we reach the real file.
 while [ -h "$SELF" ]; do
   LINK=$(readlink -- "$SELF")
   case $LINK in
     /*)
-      # Absolute symlink target.
       SELF=$LINK
       ;;
     *)
-      # Relative symlink target: resolve against the link's directory.
       SELF=$(dirname -- "$SELF")/$LINK
       ;;
   esac
 done
 
-# BINDIR = directory containing this script, canonicalized to an absolute path.
 BINDIR=$(cd -P -- "$(dirname -- "$SELF")" && pwd)
-# ROOT = parent of BINDIR (the bundle root).
 ROOT=$(cd -P -- "$BINDIR/.." && pwd)
 export RINNEGAN_ROOT="$ROOT"
 
 NODE=$ROOT/runtime/bin/node
 APP=$ROOT/lib/bin/rinnegan.js
 
-# --- macOS: best-effort strip the quarantine attribute from the bundle ---
-# Browser-downloaded tarballs get com.apple.quarantine set on extracted files,
-# which makes Gatekeeper refuse to run the bundled `node` binary. Removing it
-# recursively lets the bundle run without manual intervention. All errors are
-# ignored so this never blocks startup on systems without xattr.
+# Strip com.apple.quarantine so Gatekeeper will run the bundled node; ignore errors so startup never blocks.
 if [ "$(uname -s)" = "Darwin" ]; then
   xattr -d -r com.apple.quarantine "$ROOT" >/dev/null 2>&1 || true
 fi
 
-# --- Inject a default --config unless the user supplied one ---
-# If none of the passed arguments is exactly "--config", append
-# `--config <ROOT>/config.json` so bare `rinnegan` / `rinnegan serve` work.
+# Inject a default --config unless the user supplied one, so bare `rinnegan` works.
 HAS_CONFIG=0
 for arg in "$@"; do
   if [ "$arg" = "--config" ]; then

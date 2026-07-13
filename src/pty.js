@@ -1,10 +1,6 @@
 import pty from 'node-pty';
 
-// Spawn a bare shell PTY: command string split on whitespace into file+args,
-// server env merged under the configured overrides. No ring buffer, no restart
-// logic — the caller owns the handle's lifetime. Split-session PTYs use this
-// directly; kill them only via pty.kill() (the shell process, never a process
-// group or its child tree), so a daemonized tmux server survives for reattach.
+// Split-session PTYs kill only via pty.kill() (never a process group) so a daemonized tmux survives for reattach.
 export function spawnRawPty({ shell, cwd, cols, rows, env = {} }) {
   const [file, ...args] = shell.trim().split(/\s+/);
   return pty.spawn(file, args, {

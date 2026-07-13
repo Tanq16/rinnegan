@@ -33,9 +33,7 @@ export function serveStatic(req, res, publicDir, urlPath) {
   if (!stat.isFile()) return notFound(res);
 
   const type = CONTENT_TYPES[path.extname(resolved).toLowerCase()] || 'application/octet-stream';
-  // no-cache = store but revalidate every request, so app/style updates always
-  // reach long-lived browsers; vendored assets only change with a re-vendor,
-  // so a day of freshness is fine. ETag makes revalidation a cheap 304.
+  // vendored assets change only on re-vendor (safe to cache a day); app assets use no-cache so updates always reach browsers, with ETag for cheap 304s
   const etag = `"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
   const headers = {
     'Content-Type': type,
@@ -49,7 +47,6 @@ export function serveStatic(req, res, publicDir, urlPath) {
   }
   headers['Content-Length'] = stat.size;
   res.writeHead(200, headers);
-  // pipeline (unlike pipe) destroys the read stream if the client disconnects
-  // mid-transfer, so aborted downloads do not leak file descriptors
+  // pipeline (unlike pipe) destroys the read stream on client disconnect, so aborted downloads do not leak file descriptors
   pipeline(createReadStream(resolved), res, () => {});
 }

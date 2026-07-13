@@ -1,20 +1,5 @@
 #!/usr/bin/env bash
-#
-# bundle.sh - assemble one fully self-contained rinnegan release tarball.
-#
-# Usage: scripts/bundle.sh <os> <arch>
-#   os   = darwin | linux
-#   arch = arm64  | x64
-#
-# Produces: dist/rinnegan-<os>-<arch>.tar.gz  (top dir rinnegan-<os>-<arch>/)
-#
-# The tarball bundles its OWN Node 24.17.0 runtime plus a platform-native
-# node_modules (incl. node-pty), so the end user needs no Node/compiler/etc.
-#
-# IMPORTANT: node_modules is copied from what is installed in the repo at
-# build time. It is only correct when this script runs ON the matching
-# platform (CI runs `npm ci` on a native runner per target). Locally this
-# script is valid only for the host platform (darwin-arm64).
+# node_modules is copied from the repo at build time, so this is only correct when run on the matching platform (CI runs `npm ci` per target; locally only darwin-arm64).
 set -euo pipefail
 
 NODE_VERSION=24.17.0
@@ -43,26 +28,21 @@ case "$ARCH" in
   *) die "unsupported arch '$ARCH' (expected arm64 or x64)" ;;
 esac
 
-# Resolve repo root: this script lives in <repo>/scripts/.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Sanity-check that the repo pieces we copy actually exist.
 for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile LICENSE README.md scripts/seed.mjs; do
   [ -e "$REPO_ROOT/$req" ] || die "missing required repo path: $req"
 done
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not found"
 command -v tar  >/dev/null 2>&1 || die "tar is required but not found"
-
-# We use whatever `node` is on PATH (CI provides 24.17.0) to run the seed script.
 command -v node >/dev/null 2>&1 || die "node is required on PATH to run the seed script"
 
 BUNDLE_NAME="rinnegan-${OS}-${ARCH}"
 DIST_DIR="$REPO_ROOT/dist"
 mkdir -p "$DIST_DIR"
 
-# Build in an isolated temp dir; clean it up on any exit.
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rinnegan-bundle.XXXXXX")"
 cleanup() { rm -rf "$BUILD_ROOT"; }
 trap cleanup EXIT
@@ -77,23 +57,19 @@ mkdir -p "$BUNDLE_ROOT/bin" \
          "$BUNDLE_ROOT/lib/public" \
          "$BUNDLE_ROOT/lib/node_modules"
 
-# Copy application code verbatim into lib/.
 echo "==> Copying application code"
 cp -R "$REPO_ROOT/bin/."          "$BUNDLE_ROOT/lib/bin/"
 cp -R "$REPO_ROOT/src/."          "$BUNDLE_ROOT/lib/src/"
 cp -R "$REPO_ROOT/public/."       "$BUNDLE_ROOT/lib/public/"
 cp -R "$REPO_ROOT/node_modules/." "$BUNDLE_ROOT/lib/node_modules/"
 
-# Launcher -> bin/rinnegan (executable).
 cp "$REPO_ROOT/launcher/rinnegan" "$BUNDLE_ROOT/bin/rinnegan"
 chmod 755 "$BUNDLE_ROOT/bin/rinnegan"
 
-# License + readme at bundle root.
 cp "$REPO_ROOT/LICENSE"   "$BUNDLE_ROOT/LICENSE"
 cp "$REPO_ROOT/README.md" "$BUNDLE_ROOT/README.md"
 
-# --- Download + extract the official Node runtime for this os/arch. ---
-# darwin dist uses .tar.gz ; linux dist uses .tar.xz. `tar xf` autodetects.
+# darwin dist uses .tar.gz, linux dist uses .tar.xz; `tar xf` autodetects.
 if [ "$OS" = "darwin" ]; then
   NODE_EXT="tar.gz"
 else
@@ -116,7 +92,6 @@ NODE_BIN_SRC="$NODE_EXTRACT_DIR/$NODE_PKG/bin/node"
 cp "$NODE_BIN_SRC" "$BUNDLE_ROOT/runtime/bin/node"
 chmod 755 "$BUNDLE_ROOT/runtime/bin/node"
 
-# --- Download + extract the pinned Caddy binary for this os/arch. ---
 # Caddy's release naming differs from ours: darwin->mac, x64->amd64.
 case "$OS" in
   darwin) CADDY_OS="mac" ;;
@@ -143,29 +118,22 @@ CADDY_BIN_SRC="$CADDY_EXTRACT_DIR/caddy"
 cp "$CADDY_BIN_SRC" "$BUNDLE_ROOT/bin/caddy"
 chmod 755 "$BUNDLE_ROOT/bin/caddy"
 
-# Bundled Caddyfile at the bundle root.
 cp "$REPO_ROOT/launcher/Caddyfile" "$BUNDLE_ROOT/Caddyfile"
 
-# --- Third-party licenses for redistribution. ---
-# Both LICENSE files ship in their respective release tarballs, so a failed
-# copy is a real error (a broken bundle): copy unconditionally so set -e aborts
-# the build rather than silently omitting a license the README promises.
+# Copy licenses unconditionally so set -e aborts on a missing one rather than silently shipping a bundle without a promised license.
 mkdir -p "$BUNDLE_ROOT/licenses"
 cp "$CADDY_EXTRACT_DIR/LICENSE" "$BUNDLE_ROOT/licenses/caddy-LICENSE"
 cp "$NODE_EXTRACT_DIR/$NODE_PKG/LICENSE" "$BUNDLE_ROOT/licenses/node-LICENSE"
 
-# --- Seed config.json + users.json into the bundle root. ---
 echo "==> Seeding config.json + users.json"
 node "$REPO_ROOT/scripts/seed.mjs" "$BUNDLE_ROOT"
 
-# --- Package the tarball. ---
 TARBALL="$DIST_DIR/${BUNDLE_NAME}.tar.gz"
 echo "==> Creating tarball $TARBALL"
 rm -f "$TARBALL"
 # -C into BUILD_ROOT so the archive's top-level dir is exactly BUNDLE_NAME.
 tar czf "$TARBALL" -C "$BUILD_ROOT" "$BUNDLE_NAME"
 
-# --- Report final path + human-readable size. ---
 if SIZE="$(du -h "$TARBALL" 2>/dev/null | cut -f1)"; then
   SIZE="$(echo "$SIZE" | tr -d '[:space:]')"
 else

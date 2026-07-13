@@ -1,5 +1,3 @@
-// Pure auth helpers: scrypt password records, HMAC-signed session tokens,
-// cookie parse/serialize. No file I/O, no logging.
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 
 export const SCRYPT_DEFAULTS = { keyLength: 64, N: 16384, r: 8, p: 1 };
@@ -28,10 +26,19 @@ export async function hashPassword(password) {
 export async function verifyPassword(password, record) {
   try {
     if (!record || record.algorithm !== 'scrypt') return false;
+    // Bound scrypt params from the untrusted record; keyLength is not capped by maxmem, so an oversized value is a DoS amplifier on every login.
+    const kl = record.keyLength;
+    if (!Number.isInteger(kl) || kl < 1 || kl > 64) return false;
+    const N = record.N;
+    if (!Number.isInteger(N) || N < 2 || N > 1048576 || (N & (N - 1)) !== 0) return false;
+    const r = record.r;
+    if (!Number.isInteger(r) || r < 1 || r > 32) return false;
+    const p = record.p;
+    if (!Number.isInteger(p) || p < 1 || p > 16) return false;
     const salt = Buffer.from(record.salt, 'base64');
     const expected = Buffer.from(record.hash, 'base64');
     if (salt.length === 0 || expected.length === 0) return false;
-    const derived = await scryptAsync(password, salt, record.keyLength, record);
+    const derived = await scryptAsync(password, salt, kl, { N, r, p });
     return derived.length === expected.length && timingSafeEqual(derived, expected);
   } catch {
     return false;

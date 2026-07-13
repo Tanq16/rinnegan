@@ -1,33 +1,29 @@
-# rinnegan bundled Caddy config: self-signed HTTPS reverse proxy.
-#
-# Terminates TLS on :8443 (all interfaces, 0.0.0.0/::) with Caddy's internal
-# CA and proxies to the rinnegan server on localhost:8442. The certificate is
-# self-signed, so browsers show a one-time warning that the user accepts --
-# rinnegan does NOT install the CA into any trust store (skip_install_trust),
-# so no NSS/Java/system store is touched and Caddy never shells out to sudo.
-#
-# The site is addressed with two names so it works no matter how a client
-# connects. `https://localhost:8443` gives `tls internal` a subject, so a leaf
-# cert for `localhost` is minted up front (a bare `:8443` site would leave the
-# internal CA with nothing to sign and no cert would ever be served). The
-# host-less `https://:8443` matches ANY Host header -- including IP literals
-# such as 127.0.0.1 (the connection the CI smoke test makes) or the machine's
-# LAN IP -- so those requests still route to the reverse proxy. `bind 0.0.0.0 ::`
-# binds every interface, and `default_sni localhost` makes connections that
-# send no SNI (any IP-literal client) get served the localhost cert.
-#
-# `rinnegan serve --https` sets XDG_DATA_HOME / XDG_CONFIG_HOME to
-# <bundle>/caddy-data, so the local CA and issued certs stay inside the
-# bundle directory. Delete caddy-data/ to regenerate the CA.
+# skip_install_trust: never touch any system/NSS/Java trust store or shell out to sudo.
 {
 	admin off
 	auto_https disable_redirects
 	skip_install_trust
 	default_sni localhost
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 30s
+		}
+	}
 }
 
+# Two addresses: `https://localhost:8443` gives `tls internal` a subject to mint a cert; host-less `https://:8443` routes IP-literal Host headers (e.g. 127.0.0.1) to the proxy.
 https://localhost:8443, https://:8443 {
 	bind 0.0.0.0 ::
 	tls internal
+	request_body {
+		max_size 4MB
+	}
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
 	reverse_proxy 127.0.0.1:8442
 }

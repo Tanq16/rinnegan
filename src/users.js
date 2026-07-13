@@ -1,13 +1,11 @@
-// Users file access. Every function takes the absolute usersFile path and
-// re-reads the file per call (spec: live reload per login attempt).
+// Re-reads the users file per call so credential changes take effect without restart.
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { hashPassword, verifyPassword } from './auth.js';
 
-// Fixed record so unknown-username logins still pay the scrypt cost
-// (reduces the timing signal between "no user" and "wrong password").
+// Unknown users still pay the scrypt cost to avoid a user-enumeration timing signal.
 const DUMMY_RECORD = {
   algorithm: 'scrypt',
   salt: Buffer.alloc(16).toString('base64'),

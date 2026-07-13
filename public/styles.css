@@ -61,8 +61,6 @@ select {
   padding: 3px 6px;
 }
 
-/* ---- terminal page ---- */
-
 #stage {
   position: fixed;
   inset: 0;
@@ -70,8 +68,7 @@ select {
   align-items: center;
   justify-content: center;
   padding: 8px; /* keep computeNatural/fitShared's avail = clientWidth/Height - 16 in sync */
-  /* seamless: same color as the terminal background, so the sub-grid remainder
-     reads as terminal padding (kitty-style), not a letterbox border */
+  /* seamless: same color as terminal bg so the sub-grid remainder reads as padding, not a letterbox border */
   background: var(--base);
 }
 body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
@@ -175,8 +172,6 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 }
 #logout-form button { width: 100%; color: var(--blue); }
 
-/* ---- bars / overlays / toast ---- */
-
 #request-bar, #ended-bar {
   position: fixed;
   left: 50%;
@@ -204,8 +199,7 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   background: rgba(17, 17, 27, .82);
 }
 
-/* lobby chooser: below #control-toggle/#panel (the panel stays reachable) and
-   below the disconnect #overlay, above the terminal */
+/* lobby chooser z-index: below #panel and disconnect #overlay, above the terminal */
 #chooser {
   position: fixed;
   inset: 0;
@@ -281,8 +275,6 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   max-width: 60vw;
   overflow-wrap: anywhere;
 }
-
-/* ---- login page ---- */
 
 body.login-page {
   display: flex;

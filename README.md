@@ -211,10 +211,11 @@ two sources:
 - **Choose file…** — a normal file picker for any file.
 
 The file is streamed over the WebSocket (chunked, 25 MB cap) and written to `/tmp` on the
-host as `/tmp/<5-random-alnum>-<name>`. The random prefix keeps repeats unique; the original
-name is reduced to a bare basename in `[A-Za-z0-9._-]` (no path separators, no traversal, no
-shell metacharacters) so the path is safe to use unquoted. rinnegan never deletes these —
-`/tmp` is the OS's to reap.
+host as `/tmp/<5-random-lowercase-alnum>-<name>` with mode `0600`. The random prefix keeps
+repeats unique; the original name is reduced to a bare basename in `[A-Za-z0-9._-]` (no path
+separators, no leading dots, no traversal, no shell metacharacters, truncated to 100 chars)
+so the path is safe to use unquoted. rinnegan never deletes these — `/tmp` is the OS's to
+reap.
 
 Once the file lands, its path is **typed into your terminal at the cursor with a trailing
 space and no Enter**, so a tool like [Claude Code](https://claude.com/claude-code) reads the
@@ -297,7 +298,13 @@ directly network-exposed. Browse to **https://\<host\>:8443** and log in.
   `caddy-data/` directory inside the bundle via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`, keeping
   it fully self-contained. To regenerate the CA, delete `caddy-data/` and restart.
 - **Changing the port.** If you change `listen.port` in `config.json`, you must edit the
-  bundled `Caddyfile` so its `reverse_proxy` target matches.
+  bundled `Caddyfile` so its `reverse_proxy` target matches. `serve --https` also prints a
+  warning if `listen.port` is not the expected `8442`.
+- **Edge hardening.** The bundled `Caddyfile` adds a few defense-in-depth measures at the
+  proxy: a 4 MB request-body cap, `read_header` (10s) / `read_body` (30s) timeouts to blunt
+  slowloris, and response headers `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  and `Referrer-Policy: no-referrer` (plus stripping the `Server` header). Write/idle timeouts
+  are deliberately omitted so long-lived WebSocket streams are not torn down.
 - **Still no rate limiting.** There is still **no login rate limiting** — keep it on a
   trusted network even over HTTPS.
 

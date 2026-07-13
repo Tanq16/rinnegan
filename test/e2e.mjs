@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// End-to-end test for rinnegan. Run: node test/e2e.mjs
-// Exit 0 = all checks pass, 1 = failure. One "ok - ..." line per check.
+// End-to-end test for rinnegan. Run: node test/e2e.mjs (exit 0 = all checks pass, 1 = failure).
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -12,7 +11,7 @@ import { hashPassword } from '../src/auth.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BIN = path.join(ROOT, 'bin', 'rinnegan.js');
-const PORT = 0; // real port discovered from the server's "listening" line
+const PORT = 0; // 0 = OS-assigned; the real port is parsed from the server's "listening" line
 const ADMIN_PASS = 'e2e-admin-password';
 const USER_PASS = 'e2e-user-password';
 
@@ -43,7 +42,7 @@ class WSClient {
     this.ws = new WebSocket(url, cookie ? { headers: { cookie } } : {});
     this.texts = []; // parsed JSON text frames, in arrival order
     this.cursor = 0; // waitText consumes forward-only
-    this.bin = []; // binary frames
+    this.bin = [];
     this.binBytes = 0;
     this.epoch = null; // session epoch from hello/mode; echoed as `e` in input/resize
     this.closed = null;
@@ -110,8 +109,7 @@ class WSClient {
     }, ms, what);
   }
 
-  // like waitText but scans the whole history without consuming — for frames whose
-  // ordering relative to already-consumed ones is not part of the contract
+  // like waitText but scans the whole history without consuming (order not part of the contract)
   waitTextAnywhere(pred, ms, what) {
     return this.#wait(() => {
       for (const m of this.texts) if (pred(m)) return m;
@@ -133,8 +131,7 @@ class WSClient {
     }, ms, what);
   }
 
-  // a frame of exactly `bytes` length at index >= fromIndex: the shared-buffer
-  // replay frame, ignoring any stray split-pty frames still in flight
+  // matches the shared-buffer replay frame by exact `bytes` length, ignoring stray split-pty frames in flight
   waitReplayFrame(fromIndex, bytes, ms, what) {
     return this.#wait(() => {
       for (let i = fromIndex; i < this.bin.length; i++) {
@@ -145,9 +142,7 @@ class WSClient {
     }, ms, what);
   }
 
-  // attach (or return) to the shared session: send the natural-grid report and
-  // consume the mode reply + replay frame. The reply's cols/rows carry the
-  // recomputed min-grid; `replay` is attached when bufferBytes > 0.
+  // attach to shared: reply cols/rows carry the recomputed min-grid; `replay` is set when bufferBytes > 0
   async attachShared(cols, rows, ms = 8000) {
     const fromIdx = this.bin.length;
     const beforeTexts = this.texts.length;
@@ -219,8 +214,7 @@ function assertHelloShape(msg, username, role) {
   for (const k of ['controller', 'mode', 'viewers', 'pending']) {
     assert.ok(k in msg.state, `hello.state missing ${k}`);
   }
-  // lobby redesign: hello carries no bufferBytes and no replay follows — the
-  // buffer is delivered only on shared attach
+  // buffer is delivered only on shared attach, so hello must carry no bufferBytes
   assert.ok(!('bufferBytes' in msg), 'hello must not carry bufferBytes');
   assert.ok(Number.isInteger(msg.epoch), 'hello.epoch must be an integer');
 }
@@ -229,7 +223,7 @@ async function main() {
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-e2e-'));
   let server = null;
   const clients = [];
-  const uploadedPaths = []; // /tmp files the upload checks create; unlinked in finally
+  const uploadedPaths = []; // /tmp files created by upload checks; unlinked in finally
   const track = (c) => { clients.push(c); return c; };
 
   try {
@@ -263,7 +257,6 @@ async function main() {
       headers: cookie ? { cookie } : {},
     });
 
-    // ---------- HTTP ----------
     await check('GET / unauthenticated redirects to /login', async () => {
       const res = await get('/');
       assert.equal(res.status, 302);
@@ -333,11 +326,10 @@ async function main() {
       cookieUser = sc.split(';')[0];
     });
 
-    // ---------- WebSocket ----------
     await check('WS upgrade without cookie rejected (4401)', async () => {
       const c = track(new WSClient(wsUrl, null));
       const closed = await c.waitClose(5000, 'unauthenticated ws close');
-      // Contract: handshake completes only to deliver close 4401. 1006 covers a raw HTTP reject.
+      // WS auth must reject before accepting the socket: handshake completes only to deliver 4401 (1006 = raw HTTP reject)
       assert.ok(closed.code === 4401 || closed.code === 1006, `expected 4401 (or 1006), got ${closed.code}`);
     });
 
@@ -346,7 +338,7 @@ async function main() {
     await check('WS with cookie: hello carries you/size/state/epoch, no replay', async () => {
       adminHello = await admin.nextText(5000, 'admin hello');
       assertHelloShape(adminHello, 'tanish', 'admin');
-      // lobby redesign: connecting grants nothing; control is assigned on attach
+      // connecting grants nothing; control is assigned only on attach
       assert.equal(adminHello.state.controller, null, 'connecting must not auto-grant control');
     });
 
@@ -359,9 +351,7 @@ async function main() {
     });
 
     await check('lobby is silent: no output; input/resize/control dropped', async () => {
-      // both sockets sit in the lobby; the shared shell has already produced its
-      // prompt, none of which may reach an unattached connection. Quote-split so
-      // the marker only appears if the lobby input wrongly reaches a shell.
+      // quote-split so the marker only materializes if lobby input wrongly reaches a shell
       eng.send({ t: 'input', data: "echo E2E_LOBBY_DR''OP\r", e: eng.epoch });
       eng.send({ t: 'resize', cols: 50, rows: 10, e: eng.epoch });
       eng.send({ t: 'take' });
@@ -380,7 +370,6 @@ async function main() {
       assert.equal(m.cols, 120, 'sole attacher must get its own natural grid');
       assert.equal(m.rows, 36);
       assert.ok(m.epoch > adminHello.epoch, 'attach must bump the session epoch');
-      // spec First User Behavior, now applied at first shared attach
       await admin.waitTextAnywhere((x) => x.t === 'state' && x.controller === 'tanish', 5000, 'auto-grant to first attacher');
     });
 
@@ -388,8 +377,7 @@ async function main() {
       // quote-split so the marker only appears once the shell actually runs the command
       admin.send({ t: 'input', data: "echo E2E_MAR''KER_1\r", e: admin.epoch });
       await admin.waitBinContains('E2E_MARKER_1', 0, 8000, 'E2E_MARKER_1 in pty output');
-      // had the lobby-typed input reached the pty, its output would precede this
-      // marker in the buffer replay
+      // had lobby input reached the pty, its output would precede this marker in the replay
       assert.ok(!admin.binAll().includes('E2E_LOBBY_DROP'), 'lobby input reached the shared pty');
     });
 
@@ -441,8 +429,7 @@ async function main() {
     });
 
     await check('min-grid: member re-report recomputes the grid without control', async () => {
-      // controller is null after the release above — resize is a natural-size
-      // report from ANY shared member, not a controller privilege
+      // controller is null here: resize is a natural-size report from any member, not a control privilege
       eng.send({ t: 'resize', cols: 100, rows: 30, e: eng.epoch });
       await Promise.all([
         admin.waitText((m) => m.t === 'size' && m.cols === 100 && m.rows === 30, 5000, 'admin size 100x30'),
@@ -520,9 +507,7 @@ async function main() {
       assert.equal(sc.split(';')[0], 'rinnegan=', 'logout cookie value must be empty');
     });
 
-    // ---------- Lobby + split sessions ----------
-    // logout only clears the browser cookie (no revocation list), so the earlier
-    // cookies remain valid for these sockets.
+    // logout only clears the browser cookie (no revocation list), so these earlier cookies remain valid
     const sa = track(new WSClient(wsUrl, cookieAdmin)); // toggles split/shared/lobby
     const sb = track(new WSClient(wsUrl, cookieUser)); // stays shared: must never see split output
     const rand = Math.random().toString(36).slice(2, 10);
@@ -566,8 +551,7 @@ async function main() {
     });
 
     await check('split input needs no control', async () => {
-      // sa split straight from the lobby and never attached to shared; control
-      // belongs to the shared attacher, so the latest broadcast must not name it
+      // sa never attached to shared, so the latest control broadcast must not name it
       const lastState = sa.texts.filter((m) => m.t === 'state').pop();
       assert.ok(lastState, 'expected at least one control-state broadcast on the split socket');
       assert.notEqual(lastState.controller, 'tanish', 'split socket must not hold shared control');
@@ -577,8 +561,7 @@ async function main() {
     });
 
     await check('shared output is isolated from split sockets', async () => {
-      // sb holds control (auto-granted on attach) and drives the SHARED shell —
-      // none of it may reach the split socket
+      // sb drives the shared shell; none of its output may reach the split socket
       sb.send({ t: 'input', data: `echo SHARED_MAR''KER_${rand}\r`, e: sb.epoch });
       await sb.waitBinContains(`SHARED_MARKER_${rand}`, 0, 10000, 'shared marker on the shared socket');
       await sleep(1500); // window for any (wrongly broadcast) shared output to reach sa
@@ -589,10 +572,7 @@ async function main() {
     });
 
     await check('splitting as controller releases control (broadcast to viewers)', async () => {
-      // control is vacant (sb released above), so sa's attach auto-grants it; a
-      // follow-up {t:'take'} would be a no-op (controller unchanged => no state
-      // broadcast), and racing skipTexts against the coalesced auto-grant frame
-      // is flaky — assert the auto-grant itself, without consuming, then split
+      // assert the auto-grant without consuming (racing skipTexts against the coalesced grant frame is flaky)
       await sa.attachShared(100, 30); // back to shared: vacant control auto-grants to sa
       await Promise.all([
         sa.waitTextAnywhere((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'sa sees controller=tanish'),
@@ -711,7 +691,6 @@ async function main() {
       }
     });
 
-    // ---------- File upload ----------
     const b64 = (buf) => Buffer.from(buf).toString('base64');
 
     await check('upload from the lobby lands in /tmp with a 5-char random prefix', async () => {
@@ -810,7 +789,6 @@ async function main() {
       await up.waitClose(5000, 'stray socket close');
     });
 
-    // ---------- Leaving a session returns to the lobby ----------
     await check('leaving shared returns to the lobby but keeps the shared shell alive', async () => {
       // state here: sa (tanish) holds control in shared, sb (engineer-a) is a shared viewer
       sa.skipTexts();
