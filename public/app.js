@@ -29,8 +29,8 @@
 
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
-  const COL_STEP = 10;
-  const ROW_STEP = 3;
+  const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
+  const RESIZE_MS = 200; // debounce for viewport-driven grid reports/resizes
   const KEY_SEQS = { 'esc': '\x1b', 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a' };
   // US-layout [unshifted, shifted] chars per ev.code, for Alt-as-Escape (M-= etc.)
   const ALT_BASE = {
@@ -46,11 +46,9 @@
     stage: $('stage'), terminal: $('terminal'), probe: $('probe'),
     toggle: $('control-toggle'), panel: $('panel'),
     pUser: $('p-user'), pViewers: $('p-viewers'), pController: $('p-controller'),
-    pPending: $('p-pending'), pMode: $('p-mode'), pStatus: $('p-status'), pSize: $('p-size'),
+    pPending: $('p-pending'), pMode: $('p-mode'), pStatus: $('p-status'),
     takeBtn: $('take-btn'), releaseBtn: $('release-btn'),
-    sizeSection: $('size-section'),
-    colsDec: $('cols-dec'), colsInc: $('cols-inc'),
-    rowsDec: $('rows-dec'), rowsInc: $('rows-inc'),
+    pSession: $('p-session'), sessionBtn: $('session-btn'), sessionBadge: $('session-badge'),
     altEsc: $('alt-esc'),
     adminSection: $('admin-section'), modeSelect: $('mode-select'),
     restartBtn: $('restart-btn'), kickBtn: $('kick-btn'),
@@ -58,6 +56,8 @@
     grantBtn: $('grant-btn'), denyBtn: $('deny-btn'),
     endedBar: $('ended-bar'), endedRestart: $('ended-restart'),
     overlay: $('overlay'), overlayMsg: $('overlay-msg'), reconnectBtn: $('reconnect-btn'),
+    chooser: $('chooser'), chooserNote: $('chooser-note'), chooserInfo: $('chooser-info'),
+    chooseShared: $('choose-shared'), chooseSplit: $('choose-split'),
     toast: $('toast'),
   };
 
@@ -70,7 +70,16 @@
   let me = { username: null, role: null };
   let grid = { cols: 120, rows: 36 };
   let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
-  let replayLeft = 0; // bytes of buffer replay still expected after hello
+  let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
+  let lastSess = null; // sess before a reconnect; null on page load so a fresh
+  // load always lands at the chooser, while a dropped shared WS rejoins silently
+  let epoch = 0; // session epoch from hello/mode frames, echoed in input/resize
+  // so the server drops keystrokes in flight across a session switch
+  let splitGrid = { cols: 0, rows: 0 }; // viewport-derived grid while split
+  let resizeTimer = null;
+  let splitEnded = false; // a splitExited arrived; the lobby chooser notes it
+  let replayLeft = 0; // bytes of buffer replay still expected after a mode frame
+  let replayGen = 0; // invalidates stale write-callbacks from a superseded replay
   let clipboardArmed = false; // OSC 52 honored only for live output, not replay
 
   const isAdmin = () => me.role === 'admin';
@@ -79,7 +88,10 @@
   function send(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
-  const sendInput = (data) => send({ t: 'input', data });
+  const sendInput = (data) => {
+    if (sess === 'lobby') return; // lobby has no session to type into
+    send({ t: 'input', data, e: epoch });
+  };
 
   // --- websocket lifecycle ---
 
@@ -101,7 +113,14 @@
     hbTimer = null;
     ws = null;
     if (ev.code === 4401) { location.href = '/login'; return; }
-    if (ev.code === 4000) { setStatus('disconnected'); showOverlay('Disconnected by admin.'); return; }
+    if (ev.code === 4000) {
+      // an admin kick is deliberate, not a network blip: the Reconnect button
+      // must land at the chooser, never silently rejoin the shared session
+      lastSess = null;
+      setStatus('disconnected');
+      showOverlay('Disconnected by admin.');
+      return;
+    }
     setStatus('reconnecting');
     const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
     backoffIdx++;
@@ -110,14 +129,16 @@
 
   function onMessage(ev) {
     if (ev.data instanceof ArrayBuffer) {
-      if (term) {
+      if (term && sess !== 'lobby') { // lobby receives no PTY output
         const bytes = new Uint8Array(ev.data);
         if (replayLeft > 0) {
           replayLeft -= bytes.byteLength;
           if (replayLeft <= 0) {
             // write callbacks fire after the chunk is parsed, so this arms the
-            // clipboard only once every replayed byte has gone through the parser
-            term.write(bytes, () => { clipboardArmed = true; });
+            // clipboard only once every replayed byte has gone through the
+            // parser — and only if no newer replay has been armed meanwhile
+            const g = replayGen;
+            term.write(bytes, () => { if (g === replayGen) clipboardArmed = true; });
           } else {
             term.write(bytes);
           }
@@ -135,11 +156,21 @@
         onHello(msg);
         break;
       case 'size':
-        if (!term) break;
+        if (!term || sess !== 'shared') break; // only shared follows the min-grid
         grid = { cols: msg.cols, rows: msg.rows };
         term.resize(grid.cols, grid.rows);
-        fitFont();
-        renderPanel();
+        fitShared();
+        break;
+      case 'mode':
+        onMode(msg);
+        break;
+      case 'splitExited':
+        // the lobby mode message that follows lands on the chooser
+        splitEnded = true;
+        toast('shell exited');
+        break;
+      case 'splitError':
+        toast('split failed: ' + msg.msg);
         break;
       case 'state':
         state = { controller: msg.controller, mode: msg.mode, viewers: msg.viewers, pending: msg.pending };
@@ -149,6 +180,7 @@
         toast(msg.from + ' requests control');
         break;
       case 'ended':
+        if (sess !== 'shared') break; // shared shell state is invisible elsewhere
         els.endedBar.hidden = false;
         els.endedRestart.hidden = !isAdmin();
         break;
@@ -158,12 +190,22 @@
     }
   }
 
+  // A buffer replay follows the shared mode message (attach/return-to-shared):
+  // suppress OSC 52 until it is consumed (see the binary branch of onMessage).
+  function armReplay(bufferBytes) {
+    replayGen++; // a still-parsing older replay must not re-arm the clipboard
+    replayLeft = bufferBytes;
+    clipboardArmed = replayLeft === 0;
+  }
+
   function onHello(msg) {
     me = msg.you;
     grid = { cols: msg.size.cols, rows: msg.size.rows };
     state = msg.state;
-    replayLeft = msg.bufferBytes;
-    clipboardArmed = replayLeft === 0;
+    sess = 'lobby'; // connections land in the lobby; no replay follows hello
+    epoch = msg.epoch;
+    clearTimeout(resizeTimer);
+    armReplay(0); // a replay interrupted by the reconnect must stay disarmed
     backoffIdx = 0;
     hideOverlay();
     els.endedBar.hidden = true;
@@ -171,11 +213,52 @@
     if (!term) {
       createTerminal();
     } else {
-      // reconnect: rebuild from the buffer replay that follows
-      term.reset();
-      term.resize(grid.cols, grid.rows);
+      term.reset(); // the shared mode reply's replay (if any) rebuilds the grid
     }
-    fitFont();
+    if (lastSess === 'shared') {
+      // silent rejoin after an automatic reconnect (not a page load): the mode
+      // reply + replay restores the terminal without a trip through the chooser
+      const want = computeNatural() || {}; // absent size: server uses config
+      send({ t: 'shared', cols: want.cols, rows: want.rows });
+      hideChooser();
+    } else {
+      showChooser(null);
+    }
+    renderPanel();
+  }
+
+  function onMode(msg) {
+    if (!term) return;
+    epoch = msg.epoch; // keystrokes from before this frame carried the old epoch
+    clearTimeout(resizeTimer);
+    term.reset();
+    if (msg.mode === 'split') {
+      sess = 'split';
+      splitGrid = { cols: msg.cols, rows: msg.rows };
+      // own shell: live output only, no replay — OSC 52 is armed immediately
+      armReplay(0);
+      els.endedBar.hidden = true;
+      term.options.fontSize = DEFAULT_FONT;
+      term.resize(splitGrid.cols, splitGrid.rows);
+      hideChooser();
+      term.focus();
+    } else if (msg.mode === 'lobby') {
+      // split shell exited: back to the chooser, never auto-shared
+      sess = 'lobby';
+      armReplay(0);
+      els.endedBar.hidden = true;
+      showChooser(splitEnded ? 'shell exited' : null);
+    } else {
+      sess = 'shared';
+      grid = { cols: msg.cols, rows: msg.rows }; // the min-grid may have moved
+      term.resize(grid.cols, grid.rows);
+      fitShared();
+      armReplay(msg.bufferBytes);
+      hideChooser();
+      term.focus();
+    }
+    splitEnded = false;
+    lastSess = sess;
     renderPanel();
   }
 
@@ -186,19 +269,37 @@
       cols: grid.cols,
       rows: grid.rows,
       fontFamily: "'JetBrainsMono Nerd Font Mono', monospace",
-      fontSize: PROBE_FONT_PX,
+      fontSize: DEFAULT_FONT,
       fontWeight: 400,
       fontWeightBold: 700,
       letterSpacing: 0,
+      cursorStyle: 'bar', // kitty: cursor_shape beam
+      cursorBlink: false, // kitty: cursor_blink_interval 0
       drawBoldTextInBrightColors: false, // kitty does not brighten bold; keep palettes identical
       scrollback: 5000,
       theme: THEME,
     });
     term.open(els.terminal);
-    // v1 theme is locked: swallow OSC 12 cursor-color sets from the PTY stream /
-    // replay buffer so nothing run in the shared shell can recolor the cursor.
-    // Queries ("?") fall through so xterm still reports the theme color.
-    term.parser.registerOscHandler(12, (data) => data !== '?');
+    // v1 theme is locked: swallow OSC 10/11/12 color sets from the PTY stream /
+    // replay buffer so nothing run in a shell can recolor the terminal. 10/11
+    // matter too: this xterm build spills extra OSC 10/11 params into the next
+    // special-color slots (fg;bg;cursor), a side door to the cursor color.
+    // Queries ("?") fall through so TUIs can still detect the theme colors.
+    for (const color of [10, 11, 12]) {
+      term.parser.registerOscHandler(color, (data) => data !== '?');
+    }
+    // kitty never blinks (cursor_blink_interval 0): honor DECSCUSR shapes but
+    // always strip the blink bit; 0 restores the kitty default (steady beam).
+    // The shell re-asserts blinking-bar (\e[5 q) at every prompt (rc-base.zsh),
+    // so without this the cursor blinks forever despite cursorBlink: false.
+    term.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, (params) => {
+      const p = typeof params[0] === 'number' ? params[0] : 0;
+      if (p <= 6) {
+        term.options.cursorStyle = p === 0 ? 'bar' : p <= 2 ? 'block' : p <= 4 ? 'underline' : 'bar';
+        term.options.cursorBlink = false;
+      }
+      return true; // handled: never let the default handler enable blinking
+    });
     // OSC 52 copy (tmux load-buffer -w, remote shells): set the local clipboard.
     // Only live output is honored (see clipboardArmed) so reconnect replays don't
     // re-copy stale data; the "?" read form is consumed unanswered — answering
@@ -233,30 +334,74 @@
     return false;
   }
 
-  // Fixed canonical grid: never resize from fit logic — pick the largest font
-  // size whose cols×rows cell grid fits the viewport (letterboxed by flexbox).
-  function fitFont() {
-    if (!term) return;
-    const rect = els.probe.getBoundingClientRect();
-    const cellW = rect.width / 10 / PROBE_FONT_PX; // px per 1px of font-size
-    const cellH = rect.height / PROBE_FONT_PX;
-    if (!cellW || !cellH) return;
+  // Natural grid: what fits this viewport at DEFAULT_FONT, from the #probe's
+  // true text metrics. Reported to the server on shared attach/resize (the
+  // shared grid is the elementwise min over members) and used directly in split.
+  function computeNatural() {
+    const probe = els.probe.getBoundingClientRect();
+    if (!probe.width || !probe.height) return null;
+    const cellW = (probe.width / 10 / PROBE_FONT_PX) * DEFAULT_FONT;
+    const cellH = (probe.height / PROBE_FONT_PX) * DEFAULT_FONT;
+    return {
+      cols: Math.max(20, Math.min(500, Math.floor((els.stage.clientWidth - 16) / cellW))),
+      rows: Math.max(5, Math.min(200, Math.floor((els.stage.clientHeight - 16) / cellH))),
+    };
+  }
+
+  // Shared grid comes from the server ({t:'size'}/{t:'mode'}) — never resize it
+  // locally. Render at DEFAULT_FONT, letterboxed: the remainder stays painted in
+  // the terminal background (see #stage), the same way kitty pads a window that
+  // isn't an exact multiple of the cell. If the server grid transiently does not
+  // fit (window shrank/zoomed before the server applied our natural report),
+  // step the font down just enough to fit; the next call restores DEFAULT_FONT
+  // as soon as it fits again.
+  function fitShared() {
+    if (!term || sess !== 'shared') return;
     const availW = els.stage.clientWidth - 16; // 2 × #stage padding
     const availH = els.stage.clientHeight - 16;
-    // 0.25px steps: fractional font sizes render exactly (cell width scales
-    // linearly), and integer steps waste up to ~0.6px × cols of width as letterbox
-    let f = Math.floor(Math.min(availW / (grid.cols * cellW), availH / (grid.rows * cellH)) * 4) / 4;
-    f = Math.max(8, Math.min(32, f));
-    // xterm's DOM renderer rounds cell metrics to whole pixels, so the probe
-    // estimate can overshoot: apply, measure the real grid, step down to fit.
+    const probe = els.probe.getBoundingClientRect();
+    if (!probe.width || !probe.height) return;
+    // probe metrics: cell px per 1px of font-size; fractional sizes render fine
+    const cw = probe.width / 10 / PROBE_FONT_PX;
+    const ch = probe.height / PROBE_FONT_PX;
+    let f = Math.min(DEFAULT_FONT, availW / (grid.cols * cw), availH / (grid.rows * ch));
+    f = Math.max(8, f);
+    term.options.fontSize = f;
+    // xterm's real cell metrics differ slightly from the probe's: step down
+    // past any device-px rounding until the rendered grid actually fits
     const screen = els.terminal.querySelector('.xterm-screen');
-    for (; f > 8; f -= 0.25) {
-      if (term.options.fontSize !== f) term.options.fontSize = f;
-      if (!screen) return;
-      const r = screen.getBoundingClientRect();
-      if (r.width <= availW && r.height <= availH) return;
+    if (screen) {
+      for (let i = 0; i < 40 && f > 8; i++, f -= 0.05) {
+        if (term.options.fontSize !== f) term.options.fontSize = f;
+        const m = screen.getBoundingClientRect();
+        if (m.width <= availW && m.height <= availH) break;
+      }
     }
-    if (term.options.fontSize !== f) term.options.fontSize = f;
+  }
+
+  // Debounced viewport follow-up, both modes: split resizes its own PTY; shared
+  // reports its natural grid (any member, no gate) and the server answers with
+  // {t:'size'} only if the min-grid moved.
+  function refitViewport() {
+    if (!term) return;
+    const want = computeNatural();
+    if (!want) return;
+    if (sess === 'split') {
+      if (want.cols !== splitGrid.cols || want.rows !== splitGrid.rows) {
+        splitGrid = want;
+        term.resize(want.cols, want.rows);
+        send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch }); // own pty, no gate
+      }
+    } else if (sess === 'shared') {
+      send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch }); // natural-size report
+      fitShared(); // re-letterbox (or fall back) while the report is in flight
+    }
+    // lobby: nothing to size
+  }
+
+  function onViewportResize() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(refitViewport, RESIZE_MS);
   }
 
   // --- panel / ui state ---
@@ -267,12 +412,20 @@
     els.pController.textContent = state.controller ?? 'none';
     els.pPending.textContent = state.pending ?? 'none';
     els.pMode.textContent = state.mode;
-    els.pSize.textContent = grid.cols + '×' + grid.rows;
 
+    const shared = sess === 'shared';
+    const split = sess === 'split';
+    els.pSession.textContent = sess;
+    els.pSession.dataset.mode = sess;
+    els.sessionBtn.hidden = sess === 'lobby'; // the chooser owns lobby transitions
+    els.sessionBtn.textContent = split ? 'Return to shared' : 'Split session';
+    els.sessionBadge.hidden = !shared;
+
+    // split = your own shell, lobby = no session: input gating is shared-only
     const ctrl = isController();
-    document.body.classList.toggle('readonly', !ctrl);
+    document.body.classList.toggle('readonly', shared && !ctrl);
 
-    els.takeBtn.hidden = ctrl;
+    els.takeBtn.hidden = ctrl || !shared; // take/request ignored from split and lobby
     if (!ctrl) {
       if (state.pending === me.username) {
         els.takeBtn.disabled = true;
@@ -287,12 +440,13 @@
     els.releaseBtn.hidden = !canRelease;
     els.releaseBtn.textContent = ctrl ? 'Release Control' : 'Force Release';
 
-    const canResize = ctrl || isAdmin();
-    els.sizeSection.querySelectorAll('button').forEach((b) => { b.disabled = !canResize; });
-
     els.adminSection.hidden = !isAdmin();
     els.modeSelect.value = state.mode;
     els.endedRestart.hidden = !isAdmin();
+
+    // the chooser's subtle status line stays fresh while sitting in the lobby
+    els.chooserInfo.textContent = state.viewers + (state.viewers === 1 ? ' viewer' : ' viewers')
+      + ' · controller: ' + (state.controller ?? 'none');
 
     const showReq = Boolean(state.pending) && state.pending !== me.username && (ctrl || isAdmin());
     els.requestBar.hidden = !showReq;
@@ -320,10 +474,15 @@
     els.overlay.hidden = true;
   }
 
-  function sendResize(cols, rows) {
-    cols = Math.max(20, Math.min(500, Math.round(cols)));
-    rows = Math.max(5, Math.min(200, Math.round(rows)));
-    send({ t: 'resize', cols, rows });
+  function showChooser(note) {
+    els.chooserNote.textContent = note ?? '';
+    els.chooserNote.hidden = !note;
+    els.chooser.hidden = false;
+    els.chooseShared.focus();
+  }
+
+  function hideChooser() {
+    els.chooser.hidden = true;
   }
 
   // --- wiring ---
@@ -340,13 +499,24 @@
     });
     els.releaseBtn.addEventListener('click', () => send({ t: 'release' }));
 
-    els.sizeSection.querySelectorAll('.preset').forEach((btn) => {
-      btn.addEventListener('click', () => sendResize(Number(btn.dataset.cols), Number(btn.dataset.rows)));
+    els.chooseShared.addEventListener('click', () => {
+      const want = computeNatural() || {}; // absent size: server uses config
+      send({ t: 'shared', cols: want.cols, rows: want.rows });
     });
-    els.colsDec.addEventListener('click', () => sendResize(grid.cols - COL_STEP, grid.rows));
-    els.colsInc.addEventListener('click', () => sendResize(grid.cols + COL_STEP, grid.rows));
-    els.rowsDec.addEventListener('click', () => sendResize(grid.cols, grid.rows - ROW_STEP));
-    els.rowsInc.addEventListener('click', () => sendResize(grid.cols, grid.rows + ROW_STEP));
+    els.chooseSplit.addEventListener('click', () => {
+      const want = computeNatural() || {};
+      send({ t: 'split', cols: want.cols, rows: want.rows });
+    });
+
+    els.sessionBtn.addEventListener('click', () => {
+      const want = computeNatural() || {}; // absent size: server uses config
+      if (sess === 'split') {
+        send({ t: 'shared', cols: want.cols, rows: want.rows });
+      } else if (sess === 'shared') {
+        send({ t: 'split', cols: want.cols, rows: want.rows });
+      }
+      if (term) term.focus();
+    });
 
     document.querySelectorAll('button.seq').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -376,8 +546,8 @@
       connect();
     });
 
-    window.addEventListener('resize', fitFont);
-    document.fonts.ready.then(fitFont); // webfont metrics differ from fallback
+    window.addEventListener('resize', onViewportResize);
+    document.fonts.ready.then(onViewportResize); // webfont metrics differ from fallback
 
     connect();
   }

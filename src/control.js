@@ -88,6 +88,13 @@ export function createControl({ mode, staleControllerSeconds, requestTimeoutSeco
       clearPending();
       emit('state');
     },
+    // requester withdrawing their own pending request (e.g. switching to a
+    // split session); deny() is the controller-side refusal, this is self-cancel
+    cancelRequest(username) {
+      if (pending === null || pending !== username) return;
+      clearPending();
+      emit('state');
+    },
     release(username, isAdmin) {
       if (controller === null) return;
       if (controller !== username && !isAdmin) return;
@@ -101,15 +108,21 @@ export function createControl({ mode, staleControllerSeconds, requestTimeoutSeco
       persistMode(mode);
       emit('state');
     },
-    connected(username) {
-      if (controller === username) {
-        // controller reconnected before the stale timeout: they keep control
-        clearStale();
-      } else if (controller === null) {
-        // spec First User Behavior: no controller => connecting user gets control.
-        // No emit here — ws.js broadcasts state right after the hello frame.
-        becomeController(username);
-      }
+    // A reconnecting controller keeps the stale reservation only by actually
+    // re-attaching to the shared session (called from returnToShared in ws.js).
+    // Merely connecting parks the socket in the lobby, which holds no control
+    // claim — the stale timer keeps running there and releases control on
+    // schedule if the user never attaches.
+    reattached(username) {
+      if (controller === username) clearStale();
+    },
+    // spec First User Behavior, moved from connect to shared-attach: no
+    // controller => the attaching user gets control. No emit here — ws.js
+    // broadcasts state after the mode frame and replay.
+    claimIfVacant(username) {
+      if (controller !== null) return false;
+      becomeController(username);
+      return true;
     },
     disconnected(username) {
       if (controller === username) {

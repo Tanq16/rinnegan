@@ -1,7 +1,22 @@
 import pty from 'node-pty';
 
-export function createPtySession({ shell, cwd, cols, rows, env = {}, maxBufferBytes }) {
+// Spawn a bare shell PTY: command string split on whitespace into file+args,
+// server env merged under the configured overrides. No ring buffer, no restart
+// logic — the caller owns the handle's lifetime. Split-session PTYs use this
+// directly; kill them only via pty.kill() (the shell process, never a process
+// group or its child tree), so a daemonized tmux server survives for reattach.
+export function spawnRawPty({ shell, cwd, cols, rows, env = {} }) {
   const [file, ...args] = shell.trim().split(/\s+/);
+  return pty.spawn(file, args, {
+    name: env.TERM || 'xterm-256color',
+    cols,
+    rows,
+    cwd,
+    env: { ...process.env, ...env },
+  });
+}
+
+export function createPtySession({ shell, cwd, cols, rows, env = {}, maxBufferBytes }) {
   const size = { cols, rows };
   // procs killed via kill()/restart(): their late data/exit callbacks must be suppressed
   const dead = new WeakSet();
@@ -26,13 +41,7 @@ export function createPtySession({ shell, cwd, cols, rows, env = {}, maxBufferBy
 
   function spawn() {
     if (proc) throw new Error('shell already running');
-    const p = pty.spawn(file, args, {
-      name: env.TERM || 'xterm-256color',
-      cols: size.cols,
-      rows: size.rows,
-      cwd,
-      env: { ...process.env, ...env },
-    });
+    const p = spawnRawPty({ shell, cwd, cols: size.cols, rows: size.rows, env });
     p.onData((data) => {
       if (dead.has(p)) return;
       const chunk = Buffer.from(data, 'utf8');

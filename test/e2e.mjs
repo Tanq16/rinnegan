@@ -45,6 +45,7 @@ class WSClient {
     this.cursor = 0; // waitText consumes forward-only
     this.bin = []; // binary frames
     this.binBytes = 0;
+    this.epoch = null; // session epoch from hello/mode; echoed as `e` in input/resize
     this.closed = null;
     this.waiters = new Set();
     this.ws.on('open', () => this.#notify());
@@ -54,7 +55,11 @@ class WSClient {
         this.bin.push(b);
         this.binBytes += b.length;
       } else {
-        try { this.texts.push(JSON.parse(data.toString())); } catch { /* ignore unparsable */ }
+        try {
+          const m = JSON.parse(data.toString());
+          this.texts.push(m);
+          if (m.t === 'hello' || m.t === 'mode') this.epoch = m.epoch;
+        } catch { /* ignore unparsable */ }
       }
       this.#notify();
     });
@@ -105,7 +110,20 @@ class WSClient {
     }, ms, what);
   }
 
+  // like waitText but scans the whole history without consuming — for frames whose
+  // ordering relative to already-consumed ones is not part of the contract
+  waitTextAnywhere(pred, ms, what) {
+    return this.#wait(() => {
+      for (const m of this.texts) if (pred(m)) return m;
+      if (this.closed) throw new Error(`socket closed (code ${this.closed.code}) while waiting for ${what}`);
+      return undefined;
+    }, ms, what);
+  }
+
   nextText(ms, what) { return this.waitText(() => true, ms, what); }
+
+  // fast-forward past every already-received text so waitText only sees new ones
+  skipTexts() { this.cursor = this.texts.length; }
 
   waitBinContains(needle, fromByte, ms, what) {
     return this.#wait(() => {
@@ -115,12 +133,35 @@ class WSClient {
     }, ms, what);
   }
 
-  waitFirstBin(ms, what) {
+  // a frame of exactly `bytes` length at index >= fromIndex: the shared-buffer
+  // replay frame, ignoring any stray split-pty frames still in flight
+  waitReplayFrame(fromIndex, bytes, ms, what) {
     return this.#wait(() => {
-      if (this.bin.length > 0) return this.bin[0];
+      for (let i = fromIndex; i < this.bin.length; i++) {
+        if (this.bin[i].length === bytes) return this.bin[i];
+      }
       if (this.closed) throw new Error(`socket closed (code ${this.closed.code}) while waiting for ${what}`);
       return undefined;
     }, ms, what);
+  }
+
+  // attach (or return) to the shared session: send the natural-grid report and
+  // consume the mode reply + replay frame. The reply's cols/rows carry the
+  // recomputed min-grid; `replay` is attached when bufferBytes > 0.
+  async attachShared(cols, rows, ms = 8000) {
+    const fromIdx = this.bin.length;
+    const beforeTexts = this.texts.length;
+    this.send({ t: 'shared', cols, rows });
+    const m = await this.waitText((x) => x.t === 'mode' && x.mode === 'shared', ms, 'mode shared reply');
+    assert.ok(Number.isInteger(m.cols) && Number.isInteger(m.rows), 'mode shared must carry cols/rows');
+    assert.ok(Number.isInteger(m.bufferBytes) && m.bufferBytes >= 0, 'mode shared must carry bufferBytes');
+    for (const t of this.texts.slice(beforeTexts)) {
+      if (t.t === 'mode' && t.mode === 'lobby') throw new Error('unexpected lobby hop while attaching to shared');
+    }
+    if (m.bufferBytes > 0) {
+      m.replay = await this.waitReplayFrame(fromIdx, m.bufferBytes, ms, 'shared buffer replay frame');
+    }
+    return m;
   }
 
   waitClose(ms, what) {
@@ -153,6 +194,15 @@ function startServer(configPath) {
   return { child, ready, getStderr: () => stderr };
 }
 
+// exit code of a local command, or null if it could not be spawned (not on PATH)
+function runCmd(cmd, args) {
+  return new Promise((resolve) => {
+    const p = spawn(cmd, args, { stdio: 'ignore' });
+    p.on('error', () => resolve(null));
+    p.on('exit', (code) => resolve(code));
+  });
+}
+
 function getCookiePair(res, name) {
   for (const sc of res.headers.getSetCookie()) {
     if (sc.startsWith(name + '=')) return sc;
@@ -162,14 +212,17 @@ function getCookiePair(res, name) {
 
 function assertHelloShape(msg, username, role) {
   assert.equal(msg.t, 'hello', `first message must be hello, got ${JSON.stringify(msg)}`);
-  assert.ok(msg.you && msg.size && msg.state && 'bufferBytes' in msg, 'hello missing you/size/state/bufferBytes');
+  assert.ok(msg.you && msg.size && msg.state, 'hello missing you/size/state');
   assert.equal(msg.you.username, username);
   assert.equal(msg.you.role, role);
   assert.ok(Number.isInteger(msg.size.cols) && Number.isInteger(msg.size.rows), 'hello.size cols/rows must be integers');
   for (const k of ['controller', 'mode', 'viewers', 'pending']) {
     assert.ok(k in msg.state, `hello.state missing ${k}`);
   }
-  assert.ok(Number.isInteger(msg.bufferBytes) && msg.bufferBytes >= 0, 'hello.bufferBytes must be a non-negative integer');
+  // lobby redesign: hello carries no bufferBytes and no replay follows — the
+  // buffer is delivered only on shared attach
+  assert.ok(!('bufferBytes' in msg), 'hello must not carry bufferBytes');
+  assert.ok(Number.isInteger(msg.epoch), 'hello.epoch must be an integer');
 }
 
 async function main() {
@@ -289,20 +342,11 @@ async function main() {
 
     const admin = track(new WSClient(wsUrl, cookieAdmin));
     let adminHello;
-    await check('WS with cookie: first message is hello with you/size/state/bufferBytes', async () => {
+    await check('WS with cookie: hello carries you/size/state/epoch, no replay', async () => {
       adminHello = await admin.nextText(5000, 'admin hello');
       assertHelloShape(adminHello, 'tanish', 'admin');
-    });
-
-    await check('first user becomes controller', async () => {
-      // spec First User Behavior: no controller => first connecting user is assigned control
-      assert.equal(adminHello.state.controller, 'tanish', 'hello.state.controller must be the first user');
-    });
-
-    await check('controller input executes in shell (binary output contains marker)', async () => {
-      // quote-split so the marker only appears once the shell actually runs the command
-      admin.send({ t: 'input', data: "echo E2E_MAR''KER_1\r" });
-      await admin.waitBinContains('E2E_MARKER_1', 0, 8000, 'E2E_MARKER_1 in pty output');
+      // lobby redesign: connecting grants nothing; control is assigned on attach
+      assert.equal(adminHello.state.controller, null, 'connecting must not auto-grant control');
     });
 
     const eng = track(new WSClient(wsUrl, cookieUser));
@@ -311,11 +355,61 @@ async function main() {
       engHello = await eng.nextText(5000, 'engineer-a hello');
       assertHelloShape(engHello, 'engineer-a', 'user');
       assert.equal(engHello.state.viewers, 2);
-      await admin.waitText((m) => m.t === 'state' && m.viewers === 2, 5000, 'admin state viewers=2');
+    });
+
+    await check('lobby is silent: no output; input/resize/control dropped', async () => {
+      // both sockets sit in the lobby; the shared shell has already produced its
+      // prompt, none of which may reach an unattached connection. Quote-split so
+      // the marker only appears if the lobby input wrongly reaches a shell.
+      eng.send({ t: 'input', data: "echo E2E_LOBBY_DR''OP\r", e: eng.epoch });
+      eng.send({ t: 'resize', cols: 50, rows: 10, e: eng.epoch });
+      eng.send({ t: 'take' });
+      eng.send({ t: 'request' });
+      await sleep(1000);
+      assert.equal(admin.bin.length, 0, 'binary output reached a lobby connection (tanish)');
+      assert.equal(eng.bin.length, 0, 'binary output reached a lobby connection (engineer-a)');
+      for (const c of [admin, eng]) {
+        assert.ok(!c.texts.some((m) => m.t === 'size' || m.t === 'ended'), 'size/ended frame reached a lobby connection');
+        assert.ok(!c.texts.some((m) => m.t === 'state' && m.controller === 'engineer-a'), 'lobby take/request acquired control');
+      }
+    });
+
+    await check('first shared attach: mode+replay reply, auto-granted control', async () => {
+      const m = await admin.attachShared(120, 36);
+      assert.equal(m.cols, 120, 'sole attacher must get its own natural grid');
+      assert.equal(m.rows, 36);
+      assert.ok(m.epoch > adminHello.epoch, 'attach must bump the session epoch');
+      // spec First User Behavior, now applied at first shared attach
+      await admin.waitTextAnywhere((x) => x.t === 'state' && x.controller === 'tanish', 5000, 'auto-grant to first attacher');
+    });
+
+    await check('controller input executes in shell (binary output contains marker)', async () => {
+      // quote-split so the marker only appears once the shell actually runs the command
+      admin.send({ t: 'input', data: "echo E2E_MAR''KER_1\r", e: admin.epoch });
+      await admin.waitBinContains('E2E_MARKER_1', 0, 8000, 'E2E_MARKER_1 in pty output');
+      // had the lobby-typed input reached the pty, its output would precede this
+      // marker in the buffer replay
+      assert.ok(!admin.binAll().includes('E2E_LOBBY_DROP'), 'lobby input reached the shared pty');
+    });
+
+    await check('input with a stale session epoch is dropped', async () => {
+      // the sender IS the controller, so a drop can only be the epoch gate
+      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r", e: admin.epoch + 1 });
+      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r" }); // no epoch at all
+      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r", e: adminHello.epoch }); // pre-attach (lobby) epoch
+      await sleep(1500);
+      assert.ok(!admin.binAll().includes('E2E_STALE_EPOCH'), 'stale-epoch input reached the shared pty');
+    });
+
+    await check('min-grid: a smaller attacher shrinks the shared grid for everyone', async () => {
+      const m = await eng.attachShared(90, 25);
+      assert.equal(m.cols, 90, 'mode reply must carry the recomputed min-grid cols');
+      assert.equal(m.rows, 25, 'mode reply must carry the recomputed min-grid rows');
+      await admin.waitText((x) => x.t === 'size' && x.cols === 90 && x.rows === 25, 5000, 'admin size 90x25');
     });
 
     await check('non-controller input is ignored', async () => {
-      eng.send({ t: 'input', data: 'echo E2E_IGNORED_MARK\r' });
+      eng.send({ t: 'input', data: 'echo E2E_IGNORED_MARK\r', e: eng.epoch });
       await sleep(1500);
       assert.ok(!admin.binAll().includes('E2E_IGNORED_MARK'), 'non-controller input leaked to pty (seen by admin)');
       assert.ok(!eng.binAll().includes('E2E_IGNORED_MARK'), 'non-controller input leaked to pty (seen by engineer-a)');
@@ -345,12 +439,26 @@ async function main() {
       ]);
     });
 
-    await check('admin resize broadcasts size to all clients', async () => {
-      admin.send({ t: 'resize', cols: 100, rows: 30 });
+    await check('min-grid: member re-report recomputes the grid without control', async () => {
+      // controller is null after the release above — resize is a natural-size
+      // report from ANY shared member, not a controller privilege
+      eng.send({ t: 'resize', cols: 100, rows: 30, e: eng.epoch });
       await Promise.all([
         admin.waitText((m) => m.t === 'size' && m.cols === 100 && m.rows === 30, 5000, 'admin size 100x30'),
         eng.waitText((m) => m.t === 'size' && m.cols === 100 && m.rows === 30, 5000, 'engineer-a size 100x30'),
       ]);
+    });
+
+    await check('min-grid: member disconnect restores the larger grid', async () => {
+      const mgc = track(new WSClient(wsUrl, cookieUser));
+      assertHelloShape(await mgc.nextText(5000, 'min-grid socket hello'), 'engineer-a', 'user');
+      const m = await mgc.attachShared(80, 20);
+      assert.equal(m.cols, 80);
+      assert.equal(m.rows, 20);
+      await admin.waitText((x) => x.t === 'size' && x.cols === 80 && x.rows === 20, 5000, 'admin size 80x20');
+      mgc.terminate();
+      // min over the remaining members: tanish 120x36, engineer-a 100x30
+      await admin.waitText((x) => x.t === 'size' && x.cols === 100 && x.rows === 30, 5000, 'admin size 100x30 after detach');
     });
 
     await check('admin restart sends RIS and terminal keeps working', async () => {
@@ -360,7 +468,7 @@ async function main() {
       await admin.waitText((m) => m.t === 'size', 5000, 'size broadcast after restart');
       admin.send({ t: 'take' });
       await admin.waitText((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'controller=tanish after restart');
-      admin.send({ t: 'input', data: "echo E2E_AFTER_RE''START\r" });
+      admin.send({ t: 'input', data: "echo E2E_AFTER_RE''START\r", e: admin.epoch });
       await admin.waitBinContains('E2E_AFTER_RESTART', off, 8000, 'E2E_AFTER_RESTART after restart');
     });
 
@@ -374,15 +482,31 @@ async function main() {
       assert.equal(cb.code, 4000, `engineer-a close code ${cb.code}`);
     });
 
-    await check('reconnect after kick replays buffer (bufferBytes > 0)', async () => {
+    await check('attach clamps the natural grid to 20..500 cols and 5..200 rows', async () => {
+      const cc = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await cc.nextText(5000, 'clamp attach hello'), 'tanish', 'admin');
+      const m = await cc.attachShared(9999, 1); // sole member: the min IS the clamp
+      assert.equal(m.cols, 500);
+      assert.equal(m.rows, 5);
+      cc.ws.close();
+      await cc.waitClose(5000, 'clamp socket close'); // fully detach before the next attach recomputes
+    });
+
+    await check('reconnect lands in the lobby; attaching replays the buffer', async () => {
       const c2 = track(new WSClient(wsUrl, cookieAdmin));
       const hello = await c2.nextText(5000, 'reconnect hello');
       assertHelloShape(hello, 'tanish', 'admin');
-      assert.ok(hello.bufferBytes > 0, `expected bufferBytes > 0, got ${hello.bufferBytes}`);
-      const frame = await c2.waitFirstBin(5000, 'buffer replay frame');
-      assert.equal(frame.length, hello.bufferBytes, 'replay frame length must equal hello.bufferBytes');
-      assert.ok(frame.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior output');
+      assert.equal(hello.state.controller, 'tanish', 'stale-controller reservation must survive the kick');
+      const m = await c2.attachShared(100, 30);
+      assert.equal(m.cols, 100, 'sole attacher must reset the grid held at 500x5');
+      assert.equal(m.rows, 30);
+      assert.ok(m.bufferBytes > 0, `expected bufferBytes > 0, got ${m.bufferBytes}`);
+      assert.ok(m.replay.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior output');
+      c2.skipTexts();
+      c2.send({ t: 'release' }); // leave control vacant for the split section below
+      await c2.waitText((x) => x.t === 'state' && x.controller === null, 5000, 'controller vacated');
       c2.ws.close();
+      await c2.waitClose(5000, 'reconnect socket close');
     });
 
     await check('POST /logout clears the cookie', async () => {
@@ -393,6 +517,197 @@ async function main() {
       assert.ok(sc, 'logout missing Set-Cookie');
       assert.ok(/max-age=0/i.test(sc), 'logout cookie must have Max-Age=0');
       assert.equal(sc.split(';')[0], 'rinnegan=', 'logout cookie value must be empty');
+    });
+
+    // ---------- Lobby + split sessions ----------
+    // logout only clears the browser cookie (no revocation list), so the earlier
+    // cookies remain valid for these sockets.
+    const sa = track(new WSClient(wsUrl, cookieAdmin)); // toggles split/shared/lobby
+    const sb = track(new WSClient(wsUrl, cookieUser)); // stays shared: must never see split output
+    const rand = Math.random().toString(36).slice(2, 10);
+
+    await check('split works directly from the lobby (mode reply echoes size)', async () => {
+      const saHello = await sa.nextText(5000, 'split admin hello');
+      assertHelloShape(saHello, 'tanish', 'admin');
+      assert.equal(saHello.state.controller, null, 'control must be vacant after the release above');
+      assertHelloShape(await sb.nextText(5000, 'split viewer hello'), 'engineer-a', 'user');
+      sa.send({ t: 'split', cols: 100, rows: 30 }); // never attached to shared
+      const m = await sa.waitText((x) => x.t === 'mode', 8000, 'mode reply after split');
+      assert.equal(m.mode, 'split');
+      assert.equal(m.cols, 100);
+      assert.equal(m.rows, 30);
+    });
+
+    await check('split size is clamped to 20..500 cols and 5..200 rows', async () => {
+      const sc = track(new WSClient(wsUrl, cookieUser));
+      assertHelloShape(await sc.nextText(5000, 'clamp socket hello'), 'engineer-a', 'user');
+      sc.send({ t: 'split', cols: 9999, rows: 1 });
+      const m = await sc.waitText((x) => x.t === 'mode', 8000, 'clamped mode reply');
+      assert.equal(m.mode, 'split');
+      assert.equal(m.cols, 500);
+      assert.equal(m.rows, 5);
+      sc.ws.close(); // disconnect must kill this split pty server-side
+    });
+
+    await check('attaching to shared auto-grants vacant control', async () => {
+      const m = await sb.attachShared(100, 30);
+      assert.equal(m.cols, 100);
+      assert.equal(m.rows, 30);
+      await sb.waitTextAnywhere((x) => x.t === 'state' && x.controller === 'engineer-a', 5000, 'auto-grant on attach');
+    });
+
+    await check('split output is isolated from shared viewers', async () => {
+      // quote-split so the marker only appears once the split shell runs it
+      sa.send({ t: 'input', data: `echo SPLIT_MAR''KER_${rand}\r`, e: sa.epoch });
+      await sa.waitBinContains(`SPLIT_MARKER_${rand}`, 0, 10000, 'split marker in own output');
+      await sleep(1500); // window for any (wrongly broadcast) output to reach the viewer
+      assert.ok(!sb.binAll().includes(`SPLIT_MARKER_${rand}`), 'split output leaked to a shared viewer');
+    });
+
+    await check('split input needs no control', async () => {
+      // sa split straight from the lobby and never attached to shared; control
+      // belongs to the shared attacher, so the latest broadcast must not name it
+      const lastState = sa.texts.filter((m) => m.t === 'state').pop();
+      assert.ok(lastState, 'expected at least one control-state broadcast on the split socket');
+      assert.notEqual(lastState.controller, 'tanish', 'split socket must not hold shared control');
+      const off = sa.binBytes;
+      sa.send({ t: 'input', data: `echo SPLIT_NOC''TRL_${rand}\r`, e: sa.epoch });
+      await sa.waitBinContains(`SPLIT_NOCTRL_${rand}`, off, 10000, 'non-controller split input output');
+    });
+
+    await check('shared output is isolated from split sockets', async () => {
+      // sb holds control (auto-granted on attach) and drives the SHARED shell —
+      // none of it may reach the split socket
+      sb.send({ t: 'input', data: `echo SHARED_MAR''KER_${rand}\r`, e: sb.epoch });
+      await sb.waitBinContains(`SHARED_MARKER_${rand}`, 0, 10000, 'shared marker on the shared socket');
+      await sleep(1500); // window for any (wrongly broadcast) shared output to reach sa
+      assert.ok(!sa.binAll().includes(`SHARED_MARKER_${rand}`), 'shared output leaked to a split socket');
+      sb.skipTexts();
+      sb.send({ t: 'release' });
+      await sb.waitText((m) => m.t === 'state' && m.controller === null, 5000, 'sb releases control');
+    });
+
+    await check('splitting as controller releases control (broadcast to viewers)', async () => {
+      // control is vacant (sb released above), so sa's attach auto-grants it; a
+      // follow-up {t:'take'} would be a no-op (controller unchanged => no state
+      // broadcast), and racing skipTexts against the coalesced auto-grant frame
+      // is flaky — assert the auto-grant itself, without consuming, then split
+      await sa.attachShared(100, 30); // back to shared: vacant control auto-grants to sa
+      await Promise.all([
+        sa.waitTextAnywhere((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'sa sees controller=tanish'),
+        sb.waitTextAnywhere((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'sb sees controller=tanish'),
+      ]);
+      sb.skipTexts();
+      sa.send({ t: 'split', cols: 100, rows: 30 });
+      await sb.waitText((m) => m.t === 'state' && m.controller === null, 5000, 'release broadcast to shared viewer');
+      const m = await sa.waitText((x) => x.t === 'mode', 8000, 'mode reply after controller split');
+      assert.equal(m.mode, 'split');
+    });
+
+    await check('explicit return from split goes straight to shared with replay', async () => {
+      // attachShared fails on any lobby hop: the intentional button skips the chooser
+      const m = await sa.attachShared(100, 30);
+      assert.ok(m.bufferBytes > 0, `expected bufferBytes > 0, got ${m.bufferBytes}`);
+      assert.ok(m.replay.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior shared output');
+    });
+
+    await check('split owner resizes own pty without control', async () => {
+      sa.send({ t: 'split', cols: 100, rows: 30 });
+      await sa.waitText((x) => x.t === 'mode' && x.mode === 'split', 8000, 'mode split before resize');
+      sa.send({ t: 'resize', cols: 90, rows: 25, e: sa.epoch });
+      await sleep(300); // let the resize land before querying
+      const off = sa.binBytes;
+      sa.send({ t: 'input', data: 'stty size\r', e: sa.epoch });
+      await sa.waitBinContains('25 90', off, 10000, '"25 90" from stty size');
+    });
+
+    await check('split shell exit sends splitExited then lands in the lobby', async () => {
+      const splitEpoch = sa.epoch;
+      // stale-epoch input on a split socket must be dropped, not run anywhere
+      sa.send({ t: 'input', data: `echo STALE_SP''LIT_${rand}\r`, e: sa.epoch - 1 });
+      sa.send({ t: 'input', data: 'exit\r', e: sa.epoch });
+      const exited = await sa.waitText((m) => m.t === 'splitExited', 10000, 'splitExited');
+      assert.ok('code' in exited, 'splitExited missing exit code');
+      const m = await sa.waitText((x) => x.t === 'mode', 8000, 'mode after splitExited');
+      assert.equal(m.mode, 'lobby', 'split exit must land in the lobby, not shared');
+      assert.ok(Number.isInteger(m.epoch) && m.epoch > splitEpoch, 'lobby mode frame must carry a bumped epoch');
+      assert.ok(!('bufferBytes' in m) && !('cols' in m), 'lobby mode frame must carry epoch only');
+      const binCount = sa.bin.length;
+      const textCount = sa.texts.length;
+      await sleep(800);
+      assert.equal(sa.bin.length, binCount, 'no replay may follow the drop to the lobby');
+      assert.ok(!sa.texts.slice(textCount).some((x) => x.t === 'mode'), 'no auto mode switch may follow the drop to the lobby');
+      assert.ok(!sa.binAll().includes(`STALE_SPLIT_${rand}`), 'stale-epoch input executed in the split');
+      assert.ok(!sb.binAll().includes(`STALE_SPLIT_${rand}`), 'stale-epoch split input crossed into the shared pty');
+    });
+
+    await check('attaching from the post-exit lobby delivers the shared replay', async () => {
+      const m = await sa.attachShared(100, 30);
+      assert.ok(m.bufferBytes > 0, `expected bufferBytes > 0, got ${m.bufferBytes}`);
+      assert.ok(m.replay.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior shared output');
+    });
+
+    await check('disconnect kills the split shell process', async () => {
+      const sd = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await sd.nextText(5000, 'disconnect socket hello'), 'tanish', 'admin');
+      sd.send({ t: 'split', cols: 100, rows: 30 });
+      await sd.waitText((m) => m.t === 'mode' && m.mode === 'split', 8000, 'mode split before disconnect');
+      // $$ expands only when the shell runs it; the typed echo has no digits there
+      sd.send({ t: 'input', data: 'echo "PID:$$:DIP"\r', e: sd.epoch });
+      let pid = null;
+      const parseEnd = Date.now() + 10000;
+      while (Date.now() < parseEnd) {
+        const m = sd.binAll().toString('utf8').match(/PID:(\d+):DIP/);
+        if (m) { pid = Number(m[1]); break; }
+        await sleep(100);
+      }
+      assert.ok(Number.isInteger(pid) && pid > 1, `could not parse split shell pid (got ${pid})`);
+      process.kill(pid, 0); // must be alive before the disconnect
+      sd.terminate();
+      let gone = false;
+      const killEnd = Date.now() + 6000;
+      while (Date.now() < killEnd) {
+        try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') { gone = true; } break; }
+        await sleep(200);
+      }
+      assert.ok(gone, `split shell pid ${pid} still alive after disconnect`);
+    });
+
+    await check('tmux server survives split shell death (skipped without tmux)', async () => {
+      if (await runCmd('tmux', ['-V']) !== 0) {
+        console.log('# note: tmux not on PATH — skipping tmux survival check');
+        return;
+      }
+      const sess = `webterm-e2e-${process.pid}`;
+      const se = track(new WSClient(wsUrl, cookieAdmin));
+      assertHelloShape(await se.nextText(5000, 'tmux socket hello'), 'tanish', 'admin');
+      se.send({ t: 'split', cols: 100, rows: 30 });
+      await se.waitText((m) => m.t === 'mode' && m.mode === 'split', 8000, 'mode split for tmux check');
+      const off = se.binBytes;
+      se.send({ t: 'input', data: `tmux new-session -d -s ${sess} && echo TMUX_'U'P_OK || echo TMUX_'U'P_FAIL\r`, e: se.epoch });
+      let started = null;
+      const tmuxEnd = Date.now() + 15000;
+      while (Date.now() < tmuxEnd) {
+        const out = se.binAll().slice(off).toString('utf8');
+        if (out.includes('TMUX_UP_OK')) { started = true; break; }
+        if (out.includes('TMUX_UP_FAIL')) { started = false; break; }
+        await sleep(100);
+      }
+      if (started === false) {
+        console.log('# note: tmux unusable inside the split shell — skipping tmux survival check');
+        se.ws.close();
+        return;
+      }
+      assert.ok(started, 'timed out waiting for tmux new-session inside the split');
+      try {
+        await se.attachShared(100, 30); // kills the split pty immediately
+        await sleep(500); // give the split shell time to die
+        assert.equal(await runCmd('tmux', ['has-session', '-t', sess]), 0,
+          'tmux session must survive the split shell being killed');
+      } finally {
+        await runCmd('tmux', ['kill-session', '-t', sess]); // clean up ONLY our session
+        se.ws.close();
+      }
     });
 
     console.log(`# ${checksPassed} checks passed`);

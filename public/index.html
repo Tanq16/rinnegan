@@ -14,6 +14,7 @@
   <span id="probe" aria-hidden="true">WWWWWWWWWW</span>
 
   <button id="control-toggle" type="button" aria-expanded="false" aria-controls="panel">Control</button>
+  <span id="session-badge" hidden title="Shared session: the canonical grid everyone sees">shared</span>
 
   <aside id="panel">
     <dl class="facts">
@@ -30,20 +31,13 @@
       <button id="release-btn" type="button" hidden>Release Control</button>
     </div>
 
-    <section id="size-section">
-      <h3>Size <span id="p-size"></span></h3>
+    <section id="session-section">
+      <h3>Session <span id="p-session">shared</span></h3>
       <div class="row">
-        <button type="button" class="preset" data-cols="100" data-rows="30">100&times;30</button>
-        <button type="button" class="preset" data-cols="120" data-rows="36">120&times;36</button>
-        <button type="button" class="preset" data-cols="140" data-rows="42">140&times;42</button>
-        <button type="button" class="preset" data-cols="160" data-rows="48">160&times;48</button>
+        <button id="session-btn" type="button">Split session</button>
       </div>
-      <div class="row">
-        <button id="cols-dec" type="button">&minus;cols</button>
-        <button id="cols-inc" type="button">+cols</button>
-        <button id="rows-dec" type="button">&minus;rows</button>
-        <button id="rows-inc" type="button">+rows</button>
-      </div>
+      <p class="hint">Split is your own shell on the same box &mdash; not a sandbox &mdash;
+        and it ends when you leave. Start tmux inside it to keep work between visits.</p>
     </section>
 
     <section>
@@ -83,6 +77,19 @@
   <div id="ended-bar" hidden>
     <span>Shell exited.</span>
     <button id="ended-restart" type="button" hidden>Restart Shell</button>
+  </div>
+
+  <div id="chooser" hidden>
+    <div class="overlay-card chooser-card">
+      <h1>rinnegan</h1>
+      <p id="chooser-note" hidden></p>
+      <div class="chooser-buttons">
+        <button id="choose-shared" type="button">Shared session</button>
+        <button id="choose-split" type="button"
+          title="Your own shell on the same box &mdash; not a sandbox &mdash; it ends when you leave">Split session</button>
+      </div>
+      <p id="chooser-info"></p>
+    </div>
   </div>
 
   <div id="overlay" hidden>

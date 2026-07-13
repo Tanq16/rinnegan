@@ -4,8 +4,9 @@ A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many
 authenticated browser viewers, and exactly one active keyboard controller at a time.
 Everyone sees the same live output in their browser; users take or request control to type.
 The shell behaves like a normal interactive shell on the host — anyone who wants
-persistence, panes, or long-running workflows starts `tmux`/`zellij`/Claude Code themselves
-inside it.
+persistence, panes, or long-running workflows starts `tmux`/`zellij`/Claude Code inside it,
+in the shared session or in a per-user split session (see
+[Split sessions](#split-sessions)).
 
 It is **not** an IDE, a task manager, or a tmux manager. It is a shared terminal frontend
 and nothing more. Treat it like SSH access: it is a real shell on the machine it runs on.
@@ -103,7 +104,7 @@ defaults, so you only set what you want to change.
 | `cookie.ttlSeconds` | `86400` | 24h session; minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting |
 | `terminal.cwd` | `$HOME` | Omitted from the seed so it defaults to your home directory |
-| `terminal.cols` / `rows` | `120` / `36` | Canonical shared grid; every browser renders this size |
+| `terminal.cols` / `rows` | `120` / `36` | Initial shared grid, used only until the first viewer attaches; after that the grid follows the smallest attached viewer (see Control model) |
 | `terminal.autoRestartShell` | `false` | Keep `false`: a dead shell shows a Restart action instead of crash-looping |
 | `terminal.env` | `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG`/`LC_ALL=en_US.UTF-8` | Merged over the server process env |
 | `control.mode` | `soft` | `soft` or `fast` (see Control model) |
@@ -142,21 +143,56 @@ mode; there is no revocation list, and logout clears the cookie.
   control, a request grants immediately.
 - **Fast mode:** any authenticated user takes control instantly; the previous controller
   loses input rights.
-- **First connect / controller disconnect:** the first user to connect when there is no
-  controller is auto-assigned control. On disconnect, control is reserved for
-  `control.staleControllerSeconds` (120s default); reconnecting in time keeps it, otherwise
-  control is released.
+- **First join / controller disconnect:** the first user to join the shared session when
+  there is no controller is auto-assigned control. On disconnect, control is reserved for
+  `control.staleControllerSeconds` (120s default); re-attaching to the shared session in
+  time keeps it, otherwise control is released — reconnecting only as far as the lobby
+  chooser does not hold the reservation.
 - **Admins** can additionally take control immediately even in soft mode, force-release the
   current controller, switch fast/soft mode, restart the shell, and kick all connections
   (drops every socket, including their own, with close code 4000).
-- The controller (or an admin) resizes the canonical terminal — presets 100×30, 120×36,
-  140×42, 160×48, or ±cols/±rows steppers; the server clamps to 20–500 cols and 5–200 rows.
-  Every browser re-renders at the new grid. Keyboard input from non-controllers is silently
-  ignored server-side.
+- Keyboard input from non-controllers is silently ignored server-side.
 
-Because the whole team shares one terminal, viewers render a **fixed canonical grid**
-letterboxed into their viewport (largest font size whose cols×rows fits) rather than each
-fitting independently — mismatched local sizes would break line wrapping.
+Because the whole team shares one terminal, everyone must agree on one grid — mismatched
+local sizes would break line wrapping. Sizing works the way tmux sizes a session to its
+smallest attached client: every browser renders at a **fixed font size** (browser zoom is
+your scaling control, exactly like a native terminal emulator), reports the grid that fits
+its own window, and the shared terminal sizes itself to the **smallest attached viewer's
+grid**. The smallest viewer fills their window; for everyone else the leftover space is
+painted in the terminal background color, so it reads as terminal padding (the way kitty
+pads a window that isn't an exact multiple of the cell size) rather than a letterbox
+border. Joining from a small window shrinks the shared grid for everyone — deliberate,
+tmux-style. `terminal.cols`/`rows` in the config are only the initial grid before the
+first viewer ever attaches. Split sessions do not use the shared grid — they size to your
+own viewport like a normal terminal emulator.
+
+## Split sessions
+
+Every connection starts in a **lobby**: after login you choose **Shared session** or
+**Split session**, and nothing is shown until you pick. When a split shell exits you land
+back at the chooser (with a note that the shell exited) rather than being dropped into the
+shared session — the explicit Shared button while split still switches directly. An
+automatic reconnect after a network blip silently rejoins the shared session you were in;
+a fresh page load always starts at the chooser.
+
+A **split** gives you your own fresh shell on the same host while everyone else keeps the
+shared terminal. Splitting releases control immediately if you held it, and typing in your
+split never requires control — it is your shell. Keystrokes never cross sessions: input is
+tagged with the session it was typed into, and anything still in flight when a switch
+happens (including the drop back to the lobby when a split shell exits) is dropped rather
+than delivered to a session you were not looking at.
+
+The split shell lives only as long as you are attached to it: switching back to Shared,
+closing the tab, or losing the connection kills it immediately, and the server keeps no
+record of it — no scrollback, no reattach, nothing to clean up. Durability is tmux's job,
+not rinnegan's. Start `tmux` inside your split: the tmux server daemonizes out of the split
+shell's process tree, so it survives the split shell's death, and reconnect → Split →
+`tmux attach` resumes your work where you left it. rinnegan deliberately knows nothing
+about tmux.
+
+A split is *your own shell*, not your own environment: it runs as the same OS user as the
+shared session, with the same filesystem and visible processes. It is not a sandbox — treat
+it with the same care as the shared shell.
 
 ## Theme and fonts
 
@@ -166,6 +202,10 @@ taken from the kitty config in
 web terminal matches the native terminal setup. Bold cells are not brightened
 (`drawBoldTextInBrightColors: false`, matching kitty), and true 24-bit color is enabled end
 to end (`COLORTERM=truecolor`). The theme is baked into the frontend and not configurable.
+The cursor is locked to a steady rosewater beam, matching kitty's `cursor_shape beam` and
+`cursor_blink_interval 0`: color-set escapes (OSC 10/11/12) are filtered out and DECSCUSR
+blink bits are stripped, so nothing run inside a shell can recolor the cursor or make it
+blink.
 
 The font is **JetBrains Mono Nerd Font Mono** (the single-cell-icon "Mono" variant),
 bundled as woff2 in Regular (400) and Bold (700) weights with a `monospace` fallback — real

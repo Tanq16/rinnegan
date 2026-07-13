@@ -69,8 +69,10 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px; /* keep fitFont's avail = clientWidth/Height - 16 in sync */
-  background: var(--mantle); /* letterbox outside the cols×rows grid */
+  padding: 8px; /* keep computeNatural/fitShared's avail = clientWidth/Height - 16 in sync */
+  /* seamless: same color as the terminal background, so the sub-grid remainder
+     reads as terminal padding (kitty-style), not a letterbox border */
+  background: var(--base);
 }
 body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
 
@@ -99,6 +101,22 @@ body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
 #control-toggle:focus-visible,
 #control-toggle[aria-expanded="true"] { opacity: 1; }
 #control-toggle[aria-expanded="true"] { border-color: var(--mauve); color: var(--mauve); }
+
+#session-badge {
+  position: fixed;
+  top: 6px;
+  right: 84px; /* sits just left of #control-toggle */
+  z-index: 30;
+  background: var(--crust);
+  color: var(--blue);
+  border: 1px solid var(--blue);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 12px;
+  opacity: .35; /* muted like #control-toggle so it never fights the terminal */
+  transition: opacity .15s ease;
+}
+#session-badge:hover { opacity: 1; }
 
 #panel {
   position: fixed;
@@ -141,6 +159,15 @@ body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
 .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
 label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 
+#p-session[data-mode="split"] { color: var(--green); }
+#p-session[data-mode="lobby"] { color: var(--yellow); }
+#panel .hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--overlay2);
+}
+
 #logout-form {
   margin: 14px 0 0;
   border-top: 1px solid var(--surface0);
@@ -175,6 +202,35 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   align-items: center;
   justify-content: center;
   background: rgba(17, 17, 27, .82);
+}
+
+/* lobby chooser: below #control-toggle/#panel (the panel stays reachable) and
+   below the disconnect #overlay, above the terminal */
+#chooser {
+  position: fixed;
+  inset: 0;
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 17, 27, .82);
+}
+.chooser-card h1 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  color: var(--mauve);
+}
+#chooser-note {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--yellow);
+}
+.chooser-buttons { display: flex; gap: 10px; justify-content: center; }
+.chooser-buttons button { padding: 10px 18px; }
+#chooser-info {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--overlay2);
 }
 .overlay-card {
   background: var(--mantle);
