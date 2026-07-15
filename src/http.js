@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { serveStatic } from './static.js';
+import { error } from './log.js';
 
 const MAX_LOGIN_BODY = 10240;
 
@@ -103,7 +104,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
   return createServer((req, res) => {
     route(req, res).catch((err) => {
       // Never log request bodies here (they may contain credentials).
-      console.error('request error:', err.message);
+      error(`request error: ${err.message}`);
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
       }

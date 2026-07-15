@@ -44,7 +44,7 @@ jobs:
         run: npm_config_build_from_source=true npm ci
 
       - name: Build bundle
-        run: bash scripts/bundle.sh ${{ matrix.os }} ${{ matrix.arch }}
+        run: make bundle
 
       - name: Smoke test the bundled tarball (prove self-containment)
         run: |

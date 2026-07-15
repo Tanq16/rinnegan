@@ -1,24 +1,63 @@
-# rinnegan
+<div align="center">
+  <img src=".github/assets/logo.svg" alt="rinnegan logo" width="200">
+  <h1>rinnegan</h1>
+
+  <a href="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml"><img alt="Build Workflow" src="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml/badge.svg"></a>&nbsp;<a href="https://github.com/Tanq16/rinnegan/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Tanq16/rinnegan"></a><br><br>
+  <a href="#features">Features</a> &bull; <a href="#screenshots">Screenshots</a> &bull; <a href="#installation-and-usage">Install & Use</a> &bull; <a href="#configuration">Configuration</a> &bull; <a href="#control-model">Control Model</a> &bull; <a href="#split-sessions">Split Sessions</a> &bull; <a href="#file-upload">File Upload</a> &bull; <a href="#security">Security</a> &bull; <a href="#tips-and-notes">Tips & Notes</a>
+</div>
+
+---
 
 A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many
 authenticated browser viewers, and exactly one active keyboard controller at a time.
 Everyone sees the same live output in their browser; users take or request control to type.
 The shell behaves like a normal interactive shell on the host — anyone who wants
 persistence, panes, or long-running workflows starts `tmux`/`zellij`/Claude Code inside it,
-in the shared session or in a per-user split session (see
-[Split sessions](#split-sessions)).
+in the shared session or in a per-user split session (see [Split sessions](#split-sessions)).
 
 It is **not** an IDE, a task manager, or a tmux manager. It is a shared terminal frontend
 and nothing more. Treat it like SSH access: it is a real shell on the machine it runs on.
 
+## Features
+
+- **Shared, server-owned PTY** — one shell process on the host, streamed live to every
+  connected browser over WebSocket; nobody's local shell state can drift from anyone else's.
+- **Exactly one active keyboard controller** — soft mode (request/grant) or fast mode (take
+  instantly); admins can always force control, release it, or switch modes. See
+  [Control model](#control-model).
+- **Per-user split sessions** — jump into your own fresh shell on the same host without
+  disturbing the shared terminal, with automatic teardown on disconnect. See
+  [Split sessions](#split-sessions).
+- **Host file upload** — bridges the browser clipboard/file-picker to the host filesystem and
+  types the resulting path straight into your terminal. See [File upload](#file-upload).
+- **Bundled self-signed HTTPS** — an optional `serve --https` mode runs Caddy as a managed
+  child process to terminate TLS on the network with zero extra downloads.
+- **Self-contained per-platform tarball** — each release bundles its own Node runtime and a
+  platform-native `node-pty`; the host needs no Node, python, compiler, or `make`.
+- **Password + ephemeral-session auth** — scrypt-hashed passwords, HMAC-signed session
+  cookies with a per-boot secret, and no persisted revocation list.
+
+## Screenshots
+
+<details>
+<summary>Click to expand screenshots</summary>
+
+No screenshots yet — this section will be filled in with real captures of the shared
+terminal, control panel, and split-session chooser in a future update.
+
+</details>
+
+## Installation and Usage
+
+rinnegan is a single process you launch and it serves the shared terminal over HTTP and
+WebSocket. Point a browser at the address it prints.
+
+### Tarball (recommended)
+
 Each release is a **fully self-contained** per-platform tarball — it bundles its own Node
 runtime and a platform-native `node-pty`, so the host needs no Node, python, compiler, or
-`make`. Download, extract, run.
-
-## Download and run
-
-Grab the tarball for your OS/architecture from the
-[GitHub Releases](https://github.com/tanq16/rinnegan/releases) page:
+`make`. Grab the tarball for your OS/architecture from the
+[GitHub Releases](https://github.com/Tanq16/rinnegan/releases) page:
 
 | Platform | Asset |
 | --- | --- |
@@ -50,6 +89,20 @@ You will be prompted for the new password (input is never echoed). It takes effe
 next login without restarting the server. `./bin/rinnegan` with no subcommand runs the
 server (equivalent to `./bin/rinnegan serve`).
 
+Each tarball also ships **the Caddy binary** at `bin/caddy` for optional bundled HTTPS (see
+[HTTPS on the network](#https-on-the-network)) and third-party licenses under `licenses/`
+(Node and Caddy). It runs entirely in userspace as the invoking user and binds to
+`127.0.0.1:8442` (localhost only) by default.
+
+**macOS note.** The launcher best-effort strips the `com.apple.quarantine` extended
+attribute from the extracted bundle so Gatekeeper does not block the bundled `node` binary
+on a browser-downloaded tarball. If macOS still balks, either download the tarball with
+`curl -fLO <asset-url>` (which does not set the quarantine flag) or clear it manually:
+
+```sh
+xattr -dr com.apple.quarantine rinnegan-<os>-<arch>
+```
+
 ### HTTPS quickstart
 
 To serve over HTTPS on the network, run the bundled Caddy wrapper instead:
@@ -64,28 +117,35 @@ self-signed certificate warning, and log in with the same seeded account. In thi
 `cookie.secure` is set to `true` automatically, since all real traffic arrives over TLS via
 Caddy. See [HTTPS on the network](#https-on-the-network) for details.
 
-## Self-contained
+### From source (contributors)
 
-Each tarball ships everything it needs:
-
-- **Its own Node 24.17.0 runtime** at `runtime/bin/node` — the launcher always uses it and
-  never touches any Node on your `PATH`.
-- **A platform-native `node-pty`** compiled for that exact OS/arch (with a working
-  `spawn-helper`), so the PTY works out of the box.
-- **The Caddy binary** at `bin/caddy` for optional bundled HTTPS (see
-  [HTTPS on the network](#https-on-the-network)), plus third-party licenses under
-  `licenses/` (Node and Caddy).
-
-The host needs **no Node, python, C/C++ compiler, or `make`**. `rinnegan` runs entirely in
-userspace as the invoking user and binds to `127.0.0.1:8442` (localhost only) by default.
-
-**macOS note.** The launcher best-effort strips the `com.apple.quarantine` extended
-attribute from the extracted bundle so Gatekeeper does not block the bundled `node` binary
-on a browser-downloaded tarball. If macOS still balks, either download the tarball with
-`curl -fLO <asset-url>` (which does not set the quarantine flag) or clear it manually:
+Contributors work from a checkout of the repo, not a release tarball:
 
 ```sh
-xattr -dr com.apple.quarantine rinnegan-<os>-<arch>
+git clone https://github.com/Tanq16/rinnegan
+cd rinnegan
+make          # install deps (node-pty compiled from source), vendor assets, verify PTY
+npm run dev   # run the dev server against ./config.json, restart on change
+```
+
+For local development, copy the example config and create a user:
+
+```sh
+cp config.example.json config.json
+node bin/rinnegan.js user add --config ./config.json --username admin --role admin
+```
+
+`make` uses **fnm** to provide the pinned Node (`.node-version`, 24.17.0) and **uv** to
+provide a Python for node-gyp. **`node-pty` is compiled from source**
+(`npm_config_build_from_source=true`): Linux ships no prebuilt binary, and the macOS
+prebuild's `spawn-helper` lacks the execute bit and fails at runtime with `posix_spawnp
+failed` — forcing a source build gives one consistent, working path. `make verify` spawns a
+real PTY and fails loudly if the build ever regresses.
+
+The end-to-end suite boots a server and drives it over HTTP + WebSocket:
+
+```sh
+node test/e2e.mjs
 ```
 
 ## Configuration
@@ -104,10 +164,10 @@ defaults, so you only set what you want to change.
 | `cookie.ttlSeconds` | `86400` | 24h session; minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting |
 | `terminal.cwd` | `$HOME` | Omitted from the seed so it defaults to your home directory |
-| `terminal.cols` / `rows` | `120` / `36` | Initial shared grid, used only until the first viewer attaches; after that the grid follows the smallest attached viewer (see Control model) |
+| `terminal.cols` / `rows` | `120` / `36` | Initial shared grid, used only until the first viewer attaches; after that the grid follows the smallest attached viewer (see [Control model](#control-model)) |
 | `terminal.autoRestartShell` | `false` | Keep `false`: a dead shell shows a Restart action instead of crash-looping |
 | `terminal.env` | `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG`/`LC_ALL=en_US.UTF-8` | Merged over the server process env |
-| `control.mode` | `soft` | `soft` or `fast` (see Control model) |
+| `control.mode` | `soft` | `soft` or `fast` (see [Control model](#control-model)) |
 | `control.staleControllerSeconds` | `120` | Grace period after a controller disconnects |
 | `control.requestTimeoutSeconds` | `60` | Pending control-request expiry |
 | `buffer.maxBytes` | `2097152` | In-memory replay ring buffer (2 MB); minimum 65536 |
@@ -227,7 +287,7 @@ lobby — the path is shown and copied to your clipboard instead, so you can pla
 
 The terminal and UI chrome share one palette: **Catppuccin Mocha**, with exact hex values
 taken from the kitty config in
-[`tanq16/cli-Productivity-Suite`](https://github.com/tanq16/cli-Productivity-Suite) so the
+[`Tanq16/cli-Productivity-Suite`](https://github.com/Tanq16/cli-Productivity-Suite) so the
 web terminal matches the native terminal setup. Bold cells are not brightened
 (`drawBoldTextInBrightColors: false`, matching kitty), and true 24-bit color is enabled end
 to end (`COLORTERM=truecolor`). The theme is baked into the frontend and not configurable.
@@ -329,36 +389,21 @@ terminal.example.com {
 
 Remember to set `cookie.secure: true` in `config.json` when behind HTTPS this way.
 
-## Build from source (contributors)
+## Tips and Notes
 
-Contributors work from a checkout of the repo, not a release tarball:
-
-```sh
-git clone https://github.com/tanq16/rinnegan
-cd rinnegan
-make          # install deps (node-pty compiled from source), vendor assets, verify PTY
-npm run dev   # run the dev server against ./config.json, restart on change
-```
-
-For local development, copy the example config and create a user:
-
-```sh
-cp config.example.json config.json
-node bin/rinnegan.js user add --config ./config.json --username admin --role admin
-```
-
-`make` uses **fnm** to provide the pinned Node (`.node-version`, 24.17.0) and **uv** to
-provide a Python for node-gyp. **`node-pty` is compiled from source**
-(`npm_config_build_from_source=true`): Linux ships no prebuilt binary, and the macOS
-prebuild's `spawn-helper` lacks the execute bit and fails at runtime with `posix_spawnp
-failed` — forcing a source build gives one consistent, working path. `make verify` spawns a
-real PTY and fails loudly if the build ever regresses.
-
-The end-to-end suite boots a server and drives it over HTTP + WebSocket:
-
-```sh
-node test/e2e.mjs
-```
+- **Change the default `admin` / `changeme` password immediately** after first run with
+  `./bin/rinnegan user passwd --username admin`.
+- Sessions are **ephemeral** — the signing secret is regenerated on every boot, so a
+  restart invalidates every session and logs everyone out at once.
+- There is **no login rate limiting** — treat rinnegan like SSH access and keep it off
+  untrusted networks even behind HTTPS.
+- Manage users with `rinnegan user add|passwd|list`; `users.json` is re-read on every login
+  attempt, so changes take effect without restarting the server.
+- `--https` runs the bundled Caddy on `:8443` with a self-signed cert and reverse-proxies to
+  the localhost server on `:8442`; `cookie.secure` is forced to `true` automatically in this
+  mode.
+- A **split session** gives you a private shell that dies the moment you disconnect from
+  it — start `tmux` inside one if you need it to survive.
 
 ## License
 

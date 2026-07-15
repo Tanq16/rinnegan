@@ -290,7 +290,7 @@
     term = new Terminal({
       cols: grid.cols,
       rows: grid.rows,
-      fontFamily: "'JetBrainsMono Nerd Font Mono', monospace",
+      fontFamily: "'JetBrains Mono', monospace",
       fontSize: DEFAULT_FONT,
       fontWeight: 400,
       fontWeightBold: 700,
