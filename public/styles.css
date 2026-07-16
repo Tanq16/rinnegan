@@ -1,20 +1,3 @@
-/* Mono variant (single-cell Nerd icon advances) — matches kitty's font_family */
-@font-face {
-  font-family: 'JetBrainsMono Nerd Font Mono';
-  src: url('/vendor/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'JetBrainsMono Nerd Font Mono';
-  src: url('/vendor/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-/* Catppuccin Mocha UI chrome palette (spec.md Theme section) */
 :root {
   --base: #1e1e2e;
   --crust: #11111b;
@@ -37,8 +20,9 @@ body {
   margin: 0;
   background: var(--base);
   color: var(--text);
-  font: 400 14px/1.45 'JetBrainsMono Nerd Font Mono', monospace;
+  font: 400 14px/1.45 'Inter', system-ui, sans-serif;
 }
+code, pre, kbd, samp { font-family: 'JetBrains Mono', monospace; }
 [hidden] { display: none !important; }
 
 button, select, input { font: inherit; }
@@ -79,7 +63,7 @@ body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
   left: -9999px;
   visibility: hidden;
   white-space: pre;
-  font: 400 16px 'JetBrainsMono Nerd Font Mono', monospace;
+  font: 400 16px 'JetBrains Mono', monospace;
 }
 
 #control-toggle {

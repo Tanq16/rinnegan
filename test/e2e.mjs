@@ -40,7 +40,7 @@ function withTimeout(promise, ms, what) {
 class WSClient {
   constructor(url, cookie) {
     this.ws = new WebSocket(url, cookie ? { headers: { cookie } } : {});
-    this.texts = []; // parsed JSON text frames, in arrival order
+    this.texts = [];
     this.cursor = 0; // waitText consumes forward-only
     this.bin = [];
     this.binBytes = 0;
@@ -384,7 +384,7 @@ async function main() {
     await check('input with a stale session epoch is dropped', async () => {
       // the sender IS the controller, so a drop can only be the epoch gate
       admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r", e: admin.epoch + 1 });
-      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r" }); // no epoch at all
+      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r" });
       admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r", e: adminHello.epoch }); // pre-attach (lobby) epoch
       await sleep(1500);
       assert.ok(!admin.binAll().includes('E2E_STALE_EPOCH'), 'stale-epoch input reached the shared pty');
@@ -763,7 +763,7 @@ async function main() {
       assertHelloShape(await up.nextText(5000, 'upload incomplete hello'), 'tanish', 'admin');
       const body = Buffer.from('12345678');
       up.send({ t: 'upload-begin', id: 'up6', name: 'short.txt', size: body.length });
-      up.send({ t: 'upload-chunk', id: 'up6', data: b64(body.subarray(0, 3)) }); // 3 of 8
+      up.send({ t: 'upload-chunk', id: 'up6', data: b64(body.subarray(0, 3)) });
       up.send({ t: 'upload-end', id: 'up6' });
       const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up6', 5000, 'incomplete rejected');
       assert.ok(err.msg, 'incomplete error must carry a message');

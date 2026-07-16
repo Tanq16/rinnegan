@@ -30,7 +30,7 @@
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
   const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
-  const RESIZE_MS = 200; // debounce for viewport-driven grid reports/resizes
+  const RESIZE_MS = 200;
   const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // mirrors the server cap
   const UPLOAD_CHUNK = 512 * 1024; // raw bytes/chunk; base64 stays under the WS 1MB maxPayload
   const KEY_SEQS = { 'esc': '\x1b', 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a' };
@@ -84,7 +84,7 @@
   let replayLeft = 0; // bytes of buffer replay still expected after a mode frame
   let replayGen = 0; // invalidates stale write-callbacks from a superseded replay
   let clipboardArmed = false; // OSC 52 honored only for live output, not replay
-  let uploadSeq = 0; // per-connection upload id counter
+  let uploadSeq = 0;
   let uploading = false; // one upload at a time (server enforces too)
   let uploadTimer = null; // resets `uploading` if the server never answers
 
@@ -290,7 +290,7 @@
     term = new Terminal({
       cols: grid.cols,
       rows: grid.rows,
-      fontFamily: "'JetBrainsMono Nerd Font Mono', monospace",
+      fontFamily: "'JetBrains Mono', monospace",
       fontSize: DEFAULT_FONT,
       fontWeight: 400,
       fontWeightBold: 700,

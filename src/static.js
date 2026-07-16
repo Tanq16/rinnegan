@@ -33,12 +33,13 @@ export function serveStatic(req, res, publicDir, urlPath) {
   if (!stat.isFile()) return notFound(res);
 
   const type = CONTENT_TYPES[path.extname(resolved).toLowerCase()] || 'application/octet-stream';
-  // vendored assets change only on re-vendor (safe to cache a day); app assets use no-cache so updates always reach browsers, with ETag for cheap 304s
+  // vendored assets (/vendor/ libs, /fonts/ woff2) change only on re-vendor (safe to cache a day); app assets use no-cache so updates always reach browsers, with ETag for cheap 304s
   const etag = `"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+  const cacheable = decoded.startsWith('/vendor/') || decoded.startsWith('/fonts/');
   const headers = {
     'Content-Type': type,
     ETag: etag,
-    'Cache-Control': decoded.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-cache',
+    'Cache-Control': cacheable ? 'public, max-age=86400' : 'no-cache',
   };
   if (req.headers['if-none-match'] === etag) {
     res.writeHead(304, headers);
