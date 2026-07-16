@@ -98,7 +98,6 @@ jobs:
           fi
           echo "GET /login -> 200 OK"
 
-          # Unauthenticated GET / must redirect to login (302).
           ROOT_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8442/ || true)"
           if [ "$ROOT_CODE" != "302" ]; then
             echo "GET / expected 302 but got '$ROOT_CODE'; log:"
@@ -145,7 +144,6 @@ jobs:
             exit 1
           fi
 
-          # Unauthenticated GET / over TLS must redirect to login (302).
           HTTPS_ROOT_CODE="$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ || true)"
           if [ "$HTTPS_ROOT_CODE" != "302" ]; then
             echo "HTTPS GET / expected 302 but got '$HTTPS_ROOT_CODE'; log:"

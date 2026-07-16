@@ -2,9 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createControl } from '../src/control.js';
 
-// Every subtest enables mock timers on its own context: soft-mode request() and
-// controller disconnect() arm long real setTimeouts that would otherwise dangle
-// and keep the process alive after the assertions finish.
+// Every subtest enables mock timers on its own context: soft-mode request() and controller disconnect() arm long real setTimeouts that would otherwise dangle and keep the process alive after the assertions finish.
 function useTimers(t) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
 }
