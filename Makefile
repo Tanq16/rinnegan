@@ -1,6 +1,6 @@
 # node-pty is built from source on both platforms: required on Linux (no prebuilt) and avoids the broken macOS spawn-helper. Run make from a shell where fnm has activated .node-version.
 
-.PHONY: help setup vendor verify bundle version clean
+.PHONY: help setup vendor verify bundle smoke version clean
 .DEFAULT_GOAL := help
 
 APP_NAME := rinnegan
@@ -71,6 +71,9 @@ verify: ## Prove the node-pty native addon loads and runs
 
 bundle: vendor ## Assemble the runtime-bundled tarball for the host platform
 	@bash scripts/bundle.sh "$$(node -p 'process.platform')" "$$(node -p 'process.arch')"
+
+smoke: ## Smoke-test the built tarball with a scrubbed PATH (prove self-containment)
+	@bash scripts/smoke-test.sh "$$(node -p 'process.platform')" "$$(node -p 'process.arch')"
 
 version: ## Calculate next version from commit message
 	@LATEST_TAG=$$(git tag --sort=-v:refname | head -n1 || echo "0.0.0"); \

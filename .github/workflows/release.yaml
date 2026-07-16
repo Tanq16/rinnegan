@@ -2,16 +2,65 @@ name: release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.17.0
+
+      # Unit suites use only node: builtins + src/, so they run without installing node_modules.
+      - name: Run unit tests
+        run: npm test
+
+  create-release:
+    name: create-release
+    needs: test
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_created: ${{ steps.create_release.outputs.release_created }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # make version reads the latest tag + this commit message: [major-release]/[minor-release]/else patch.
+      - name: Calculate version
+        id: version
+        run: |
+          NEW_VERSION=$(make -s version)
+          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: create_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --draft \
+            --target "${{ github.sha }}" \
+            --notes "Self-contained rinnegan release ${{ steps.version.outputs.version }}. Each tarball bundles its own Node 24.17.0 runtime and a platform-native node-pty. Download the asset for your platform (linux-x64, linux-arm64, darwin-x64, darwin-arm64), extract, and run ./bin/rinnegan. Default login is admin / changeme; change it after first run."
+          echo "release_created=true" >> "$GITHUB_OUTPUT"
+
   build:
     name: build ${{ matrix.os }}-${{ matrix.arch }}
+    needs: create-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -47,141 +96,40 @@ jobs:
         run: make bundle
 
       - name: Smoke test the bundled tarball (prove self-containment)
-        run: |
-          set -euo pipefail
-          TARBALL="dist/rinnegan-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
-          test -f "$TARBALL" || { echo "tarball not found: $TARBALL"; exit 1; }
+        run: make smoke
 
-          SMOKE_DIR="$(mktemp -d)"
-          tar xzf "$TARBALL" -C "$SMOKE_DIR"
-          APP_DIR="$SMOKE_DIR/rinnegan-${{ matrix.os }}-${{ matrix.arch }}"
-          test -x "$APP_DIR/bin/rinnegan" || { echo "launcher missing/not executable"; exit 1; }
-          test -x "$APP_DIR/runtime/bin/node" || { echo "bundled node missing/not executable"; exit 1; }
-
-          cd "$APP_DIR"
-
-          # Scrubbed PATH deliberately excludes node so startup proves the bundled runtime is used.
-          env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
-            ./bin/rinnegan serve --config ./config.json > server.log 2>&1 &
-          SERVER_PID=$!
-
-          cleanup() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            wait "$SERVER_PID" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          # Confirm node is not on the scrubbed PATH, else the test cannot prove self-containment.
-          if env -i PATH=/usr/bin:/bin command -v node >/dev/null 2>&1; then
-            echo "unexpected: node found on scrubbed PATH; smoke test cannot prove self-containment"
-            exit 1
-          fi
-
-          LOGIN_CODE=""
-          for i in $(seq 1 30); do
-            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-              echo "server exited early; log:"
-              cat server.log || true
-              exit 1
-            fi
-            LOGIN_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8442/login || true)"
-            if [ "$LOGIN_CODE" = "200" ]; then
-              break
-            fi
-            sleep 1
-          done
-
-          if [ "$LOGIN_CODE" != "200" ]; then
-            echo "GET /login expected 200 but got '$LOGIN_CODE'; log:"
-            cat server.log || true
-            exit 1
-          fi
-          echo "GET /login -> 200 OK"
-
-          ROOT_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8442/ || true)"
-          if [ "$ROOT_CODE" != "302" ]; then
-            echo "GET / expected 302 but got '$ROOT_CODE'; log:"
-            cat server.log || true
-            exit 1
-          fi
-          echo "GET / -> 302 OK"
-
-          # The --https server also binds 8442, so stop the HTTP-only server first to free the port.
-          kill "$SERVER_PID" 2>/dev/null || true
-          wait "$SERVER_PID" 2>/dev/null || true
-
-          # Caddy is invoked by absolute path via RINNEGAN_ROOT, so the scrubbed PATH does not affect it.
-          env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
-            ./bin/rinnegan serve --https --config ./config.json > https.log 2>&1 &
-          HTTPS_PID=$!
-
-          cleanup() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            wait "$SERVER_PID" 2>/dev/null || true
-            kill "$HTTPS_PID" 2>/dev/null || true
-            wait "$HTTPS_PID" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          # -k accepts the self-signed cert.
-          HTTPS_LOGIN_CODE=""
-          for i in $(seq 1 30); do
-            if ! kill -0 "$HTTPS_PID" 2>/dev/null; then
-              echo "https server exited early; log:"
-              cat https.log || true
-              exit 1
-            fi
-            HTTPS_LOGIN_CODE="$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/login || true)"
-            if [ "$HTTPS_LOGIN_CODE" = "200" ]; then
-              break
-            fi
-            sleep 1
-          done
-
-          if [ "$HTTPS_LOGIN_CODE" != "200" ]; then
-            echo "HTTPS GET /login expected 200 but got '$HTTPS_LOGIN_CODE'; log:"
-            cat https.log || true
-            exit 1
-          fi
-
-          HTTPS_ROOT_CODE="$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ || true)"
-          if [ "$HTTPS_ROOT_CODE" != "302" ]; then
-            echo "HTTPS GET / expected 302 but got '$HTTPS_ROOT_CODE'; log:"
-            cat https.log || true
-            exit 1
-          fi
-          echo "HTTPS via bundled Caddy -> 200/302 OK"
-
-          echo "Smoke test passed for rinnegan-${{ matrix.os }}-${{ matrix.arch }}"
-
-      - name: Upload bundle artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: rinnegan-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/rinnegan-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-
-  release:
-    name: release
-    needs: build
-    runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download all bundle artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-
-      - name: List downloaded artifacts
-        run: find dist -type f -name '*.tar.gz' -print
-
-      - name: Create GitHub release
+      - name: Upload release asset
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" dist/**/*.tar.gz \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --notes "Self-contained rinnegan release ${GITHUB_REF_NAME}. Each tarball bundles its own Node 24.17.0 runtime and a platform-native node-pty. Download the asset for your platform (linux-x64, linux-arm64, darwin-x64, darwin-arm64), extract, and run ./bin/rinnegan. Default login is admin / changeme; change it after first run."
+          gh release upload "${{ needs.create-release.outputs.version }}" \
+            "dist/rinnegan-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" \
+            --clobber
+
+  publish:
+    name: publish
+    needs: [create-release, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ needs.create-release.outputs.version }}" --draft=false
+
+  cleanup-on-failure:
+    name: cleanup-on-failure
+    needs: [create-release, build, publish]
+    if: always() && (needs.build.result == 'failure' || needs.publish.result == 'failure') && needs.create-release.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # A partial release with missing platform tarballs is worse than none, so drop the draft.
+      - name: Delete draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete "${{ needs.create-release.outputs.version }}" --yes

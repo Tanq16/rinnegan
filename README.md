@@ -1,6 +1,6 @@
 <div align="center">
   <img src=".github/assets/logo.svg" alt="rinnegan logo" width="200">
-  <h1>rinnegan</h1>
+  <h1>Rinnegan</h1>
 
   <a href="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml"><img alt="Build Workflow" src="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml/badge.svg"></a>&nbsp;<a href="https://github.com/Tanq16/rinnegan/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Tanq16/rinnegan"></a><br><br>
   <a href="#features">Features</a> &bull; <a href="#screenshots">Screenshots</a> &bull; <a href="#installation-and-usage">Install & Use</a> &bull; <a href="#configuration">Configuration</a> &bull; <a href="#control-model">Control Model</a> &bull; <a href="#split-sessions">Split Sessions</a> &bull; <a href="#file-upload">File Upload</a> &bull; <a href="#security">Security</a> &bull; <a href="#tips-and-notes">Tips & Notes</a>
@@ -8,9 +8,9 @@
 
 ---
 
-A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output in their browser; users take or request control to type. The shell behaves like a normal interactive shell on the host — anyone who wants persistence, panes, or long-running workflows starts `tmux`/`zellij`/Claude Code inside it, in the shared session or in a per-user split session (see [Split sessions](#split-sessions)).
+A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output in their browser; users take or request control to type. The shell behaves like a normal interactive shell on the host — anyone who wants persistence, panes, or long-running workflows starts `tmux` or `zellij` inside it, in the shared session or in a per-user split session (see [Split sessions](#split-sessions)).
 
-It is **not** an IDE, a task manager, or a tmux manager. It is a shared terminal frontend and nothing more. Treat it like SSH access: it is a real shell on the machine it runs on.
+It is **not** an IDE, a task manager, or a tmux manager. It is a shared terminal frontend and nothing more. Treat it as a web-based SSH client for multiple users to collaborate in a specific environment. The most common use case is to deploy it on homelab workspaces and cloud VPSs.
 
 ## Features
 
@@ -75,7 +75,7 @@ Each tarball also ships **the Caddy binary** at `bin/caddy` for optional bundled
 xattr -dr com.apple.quarantine rinnegan-<os>-<arch>
 ```
 
-### HTTPS quickstart
+#### HTTPS quickstart
 
 To serve over HTTPS on the network, run the bundled Caddy wrapper instead:
 
@@ -254,7 +254,3 @@ Remember to set `cookie.secure: true` in `config.json` when behind HTTPS this wa
 - Manage users with `rinnegan user add|passwd|list`; `users.json` is re-read on every login attempt, so changes take effect without restarting the server.
 - `--https` runs the bundled Caddy on `:8443` with a self-signed cert and reverse-proxies to the localhost server on `:8442`; `cookie.secure` is forced to `true` automatically in this mode.
 - A **split session** gives you a private shell that dies the moment you disconnect from it — start `tmux` inside one if you need it to survive.
-
-## License
-
-MIT © 2026 Tanishq Rupaal. See [LICENSE](LICENSE).
