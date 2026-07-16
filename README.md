@@ -1,5 +1,5 @@
 <div align="center">
-  <img src=".github/assets/logo.svg" alt="Rinnegan logo" width="200">
+  <img src=".github/assets/logo.svg" alt="Rinnegan logo" width="250">
   <h1>Rinnegan</h1>
 
   <a href="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml"><img alt="Build Workflow" src="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml/badge.svg"></a>&nbsp;<a href="https://github.com/Tanq16/rinnegan/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Tanq16/rinnegan"></a><br><br>
