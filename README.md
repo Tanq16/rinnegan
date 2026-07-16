@@ -296,11 +296,12 @@ The cursor is locked to a steady rosewater beam, matching kitty's `cursor_shape 
 blink bits are stripped, so nothing run inside a shell can recolor the cursor or make it
 blink.
 
-The font is **JetBrains Mono Nerd Font Mono** (the single-cell-icon "Mono" variant),
-bundled as woff2 in Regular (400) and Bold (700) weights with a `monospace` fallback — real
-bold glyphs and full Nerd Font coverage for powerline prompts and TUIs. The font files are
-committed to the repo and shipped inside every tarball, so no font tooling is needed to
-build or run.
+The terminal is set in **JetBrains Mono Nerd Font Mono** (the single-cell-icon "Mono"
+variant), bundled as woff2 in Regular (400) and Bold (700) weights with a `monospace`
+fallback — real bold glyphs and full Nerd Font coverage for powerline prompts and TUIs. UI
+chrome (login, the lobby, session controls) is set in **Inter** (400/600), also bundled as
+woff2. All font files are committed to the repo and shipped inside every tarball, so no font
+tooling is needed to build or run.
 
 ## CLI
 
