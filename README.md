@@ -3,7 +3,7 @@
   <h1>Rinnegan</h1>
 
   <a href="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml"><img alt="Build Workflow" src="https://github.com/Tanq16/rinnegan/actions/workflows/release.yaml/badge.svg"></a>&nbsp;<a href="https://github.com/Tanq16/rinnegan/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Tanq16/rinnegan"></a><br><br>
-  <a href="#features">Features</a> &bull; <a href="#screenshots">Screenshots</a> &bull; <a href="#installation-and-usage">Install & Use</a> &bull; <a href="#configuration">Configuration</a> &bull; <a href="#control-model">Control Model</a> &bull; <a href="#split-sessions">Split Sessions</a> &bull; <a href="#file-upload">File Upload</a> &bull; <a href="#security">Security</a> &bull; <a href="#tips-and-notes">Tips & Notes</a>
+  <a href="#features">Features</a> &bull; <a href="#screenshots">Screenshots</a> &bull; <a href="#installation-and-usage">Install & Use</a> &bull; <a href="#configuration">Configuration</a> &bull; <a href="#control-model">Control Model</a> &bull; <a href="#split-sessions">Split Sessions</a> &bull; <a href="#file-upload">File Upload</a> &bull; <a href="#security">Security</a>
 </div>
 
 ---
@@ -37,7 +37,7 @@ rinnegan is a single process you launch and it serves the shared terminal over H
 
 ### Tarball (recommended)
 
-Each release is a **fully self-contained** per-platform tarball — it bundles its own Node runtime and a platform-native `node-pty`, so the host needs no Node, python, compiler, or `make`. Grab the tarball for your OS/architecture from the [GitHub Releases](https://github.com/Tanq16/rinnegan/releases) page:
+Grab the tarball for your OS/architecture from the [GitHub Releases](https://github.com/Tanq16/rinnegan/releases) page:
 
 | Platform | Asset |
 | --- | --- |
@@ -245,12 +245,3 @@ terminal.example.com {
 ```
 
 Remember to set `cookie.secure: true` in `config.json` when behind HTTPS this way.
-
-## Tips and Notes
-
-- **Change the default `admin` / `changeme` password immediately** after first run with `./bin/rinnegan user passwd --username admin`.
-- Sessions are **ephemeral** — the signing secret is regenerated on every boot, so a restart invalidates every session and logs everyone out at once.
-- There is **no login rate limiting** — treat rinnegan like SSH access and keep it off untrusted networks even behind HTTPS.
-- Manage users with `rinnegan user add|passwd|list`; `users.json` is re-read on every login attempt, so changes take effect without restarting the server.
-- `--https` runs the bundled Caddy on `:8443` with a self-signed cert and reverse-proxies to the localhost server on `:8442`; `cookie.secure` is forced to `true` automatically in this mode.
-- A **split session** gives you a private shell that dies the moment you disconnect from it — start `tmux` inside one if you need it to survive.
