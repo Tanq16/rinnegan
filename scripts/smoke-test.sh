@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Proves a built tarball is self-contained: extract it, scrub node from PATH, and confirm
-# both the plain-HTTP server and the bundled-Caddy HTTPS front serve with only the bundled runtime.
+# Proves a built tarball is self-contained: extract it, scrub node from PATH, and confirm node-pty
+# spawns and both the plain-HTTP server and the bundled-Caddy HTTPS front serve on the bundled runtime.
 set -euo pipefail
 
 die() {
@@ -49,6 +49,21 @@ cleanup() {
   rm -rf "$SMOKE_DIR"
 }
 trap cleanup EXIT
+
+# node-pty's darwin prebuild fails at spawn() time, not import time, so only a real spawn catches it.
+# cd lib so the bare specifier resolves the bundle's node_modules, not the repo's.
+if ! ( cd lib && env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
+  ../runtime/bin/node --input-type=module -e "
+import pty from 'node-pty';
+const bail = setTimeout(() => process.exit(1), 10000);
+const t = pty.spawn('/usr/bin/env', ['sh', '-c', 'echo pty-ok'], { name: 'xterm-256color', cols: 120, rows: 36, env: process.env });
+let out = '';
+t.onData((d) => { out += d; });
+t.onExit((e) => { clearTimeout(bail); process.exit(out.includes('pty-ok') && e.exitCode === 0 ? 0 : 1); });
+" ); then
+  die "node-pty failed to spawn a PTY with the bundled runtime"
+fi
+echo "node-pty spawns a real PTY -> OK"
 
 # Scrubbed PATH deliberately excludes node so startup proves the bundled runtime is used.
 env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
