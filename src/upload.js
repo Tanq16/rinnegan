@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, unlink } from 'node:fs/promises';
+import { mkdir, link, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -27,14 +27,17 @@ export function safeName(name) {
   return clean || 'file';
 }
 
+// Keep printable names verbatim (they never reach a shell); reject only traversal + control chars. Char-collapsing silently merged distinct files onto one path.
 export function safeRelPath(rel) {
   const parts = String(rel || '').split(/[\\/]/);
   const out = [];
   for (const part of parts) {
-    if (part === '' || part === '.' || part === '..') return null;
-    const clean = part.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 100);
-    if (!clean) return null;
-    out.push(clean);
+    if (part === '' || part === '.' || part === '..' || part.length > 255) return null;
+    for (let i = 0; i < part.length; i++) {
+      const c = part.charCodeAt(i);
+      if (c < 0x20 || c === 0x7f) return null;
+    }
+    out.push(part);
   }
   return out.join('/');
 }
@@ -66,6 +69,12 @@ function lookupBatch(batchId) {
 function badRequest(res, msg) {
   // close: the unread remainder of the body poisons keep-alive
   res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
+  res.end(msg);
+}
+
+function conflict(res, msg) {
+  // no close: 409 fires only after the body was fully streamed, so nothing is left to poison keep-alive
+  res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(msg);
 }
 
@@ -104,10 +113,10 @@ async function streamToFile(req, dest) {
   const tmp = dest + '.' + randomBytes(4).toString('hex') + '.part';
   try {
     await pipeline(req, createWriteStream(tmp, { flags: 'wx', mode: 0o600 }));
-    await rename(tmp, dest);
-  } catch (e) {
+    // link, not rename: a folder-upload sibling that collides must fail (EEXIST), never clobber
+    await link(tmp, dest);
+  } finally {
     await unlink(tmp).catch(() => {});
-    throw e;
   }
 }
 
@@ -126,7 +135,12 @@ export async function handleUpload(req, res, searchParams, username) {
     if (!dest.startsWith(UPLOAD_DIR + '/')) return badRequest(res, 'bad path'); // defense in depth
   }
 
-  await streamToFile(req, dest);
+  try {
+    await streamToFile(req, dest);
+  } catch (e) {
+    if (e.code === 'EEXIST') return conflict(res, 'a file already exists at that path');
+    throw e;
+  }
   info('upload: ' + username + ' ' + dest);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ path: dest }));

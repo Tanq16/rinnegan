@@ -62,7 +62,8 @@ export async function handleDownload(req, res, searchParams, username) {
       res.writeHead(200, headers);
       return res.end();
     }
-    const child = spawn('tar', ['czf', '-', '-C', path.dirname(resolved), name], {
+    // -- ends option parsing so a directory whose name starts with '-' is a path, not a tar flag
+    const child = spawn('tar', ['czf', '-', '-C', path.dirname(resolved), '--', name], {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     child.on('error', (e) => {

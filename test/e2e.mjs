@@ -800,6 +800,15 @@ async function main() {
       assert.equal(one.status, 200);
       assert.equal((await one.json()).path, root + '/sub/one.txt');
       assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'batch bytes differ from source');
+      // a colliding sibling must fail-closed (409), never silently clobber the first file
+      const collide = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+        '&path=' + encodeURIComponent('sub/one.txt'), {
+        method: 'POST',
+        headers: { cookie: cookieAdmin },
+        body: 'CLOBBER',
+      });
+      assert.equal(collide.status, 409, 'a name collision must be refused, not overwrite');
+      assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'the original file must survive a collision');
       const evil = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
         '&path=' + encodeURIComponent('../evil'), {
         method: 'POST',
