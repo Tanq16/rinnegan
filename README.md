@@ -17,7 +17,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a shared termin
 - **Shared, server-owned PTY** — one shell process on the host, streamed live to every browser over WebSocket; no one's local state drifts.
 - **Exactly one keyboard controller** — soft (request/grant) or fast (take instantly); admins can force, release, or switch modes. See [Control](#control).
 - **Per-user split sessions** — your own fresh shell on the same host without disturbing the shared terminal, torn down on disconnect. See [Split sessions](#split-sessions).
-- **Host file upload** — bridges the browser clipboard/file-picker to the host filesystem and types the resulting path into your terminal. See [File upload](#file-upload).
+- **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
 - **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
 - **Self-contained tarball** — each release bundles its own Node runtime and a platform-native `node-pty`; the host needs no Node, Python, compiler, or `make`.
 - **Password + ephemeral-session auth** — scrypt-hashed passwords, HMAC-signed cookies with a per-boot secret, no persisted revocation list.
@@ -121,14 +121,21 @@ A **split** gives you your own fresh shell on the same host while everyone else 
 - A split lives only while you are attached — switching to Shared, closing the tab, or losing the connection kills it, with no scrollback or reattach. Durability is tmux's job: start `tmux` inside a split and it daemonizes out of the split's process tree, so reconnect → Split → `tmux attach` resumes your work.
 - It is your own *shell*, not a sandbox: same OS user, filesystem, and visible processes as the shared session. Treat it with the same care.
 
-### File upload
+### File transfer
 
-`Ctrl-V` in a browser terminal can't reach a CLI that reads the *host's* clipboard — a pasted image is in your browser, not on the box the shell runs on. The Control panel's **Upload file** button bridges that, with two sources:
+`Ctrl-V` in a browser terminal can't reach a CLI that reads the *host's* clipboard — a pasted image is in your browser, not on the box the shell runs on. The Control panel's **Files** panel bridges both directions over plain HTTP; the WebSocket carries terminal traffic only.
+
+**Upload** — `Upload…` offers three sources:
 
 - **From clipboard** — grabs an image off your clipboard (needs a secure context: HTTPS or `localhost`).
 - **Choose file…** — a normal file picker for any file.
+- **Choose folder…** — a directory picker; every file in the tree goes up, one at a time.
 
-The file is streamed over the WebSocket (chunked, 25 MB cap) and written to `/tmp/<5-random-alnum>-<name>` mode `0600`; the name is reduced to a bare basename in `[A-Za-z0-9._-]` (no separators, leading dots, traversal, or shell metacharacters; ≤100 chars) so the path is safe unquoted. rinnegan never deletes these — `/tmp` is the OS's to reap. The path is then typed at your cursor with a trailing space and no Enter, so a tool like [Claude Code](https://claude.com/claude-code) reads the image and you can still add a prompt. In the shared session this needs control; without it (or from the lobby) the path is shown and copied to your clipboard instead.
+Bytes are streamed to disk with a `POST`, with **no size cap** and a live progress bar you can hide or cancel. A single file lands at `/tmp/<5-random-alnum>-<name>` mode `0600`; the name is reduced to a bare basename in `[A-Za-z0-9._-]` (no separators, leading dots, traversal, or shell metacharacters; ≤100 chars) so the path is safe unquoted. A folder lands under `/tmp/<5-random-alnum>-<folder>/` with its relative tree preserved and each segment sanitized the same way — it is copy-the-files, not archive, so empty directories, symlinks, and permissions are not carried. A cancelled or failed upload's partial temp file is deleted; completed uploads are never deleted by rinnegan — `/tmp` is the OS's to reap. Upload needs only a login: no terminal control, and it works from the lobby.
+
+**Nothing is typed into your terminal.** The modal shows the finished path and copies it when the clipboard API is available (HTTPS or `localhost`); otherwise it says so and you select it. Paste it into a tool like [Claude Code](https://claude.com/claude-code) yourself — one `Cmd-V`, and you choose when and where.
+
+**Download** — give the Files panel an absolute host path. It probes the path first, so a typo shows a real in-app error instead of a cryptic browser failure, then hands off to your browser's own download manager. A single file streams with real progress; a directory streams as `<dir>.tar.gz` (`tar xzf` it on the other end). Any logged-in user can download anything the server user can read — parity with the shell they already have (see [Security](#security)). Every upload and download is logged server-side with the user and the path.
 
 ### Theme and fonts
 
@@ -174,7 +181,7 @@ Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LI
 - **Certificate:** issued by Caddy's internal CA, so browsers warn once per client; removing the warning means installing the CA on every client (out of scope).
 - **State:** Caddy's CA and certs live in `caddy-data/` inside the bundle (via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`); delete it and restart to regenerate the CA.
 - **Ports:** if you change `listen.port`, edit the bundled `Caddyfile` so its `reverse_proxy` target matches (`serve --https` warns if the port is not `8442`).
-- **Edge hardening:** the `Caddyfile` adds a 4 MB body cap, `read_header` (10s) / `read_body` (30s) timeouts, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
+- **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
 - **Still no rate limiting** even over HTTPS — keep it on a trusted network.
 
 rinnegan and Caddy can also run as two separate processes: `./bin/rinnegan serve`, then `./bin/caddy` with `XDG_DATA_HOME`/`XDG_CONFIG_HOME` pointed at a local directory.

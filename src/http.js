@@ -1,5 +1,7 @@
 import { createServer } from 'node:http';
 import { serveStatic } from './static.js';
+import { handleUpload, handleUploadBatch } from './upload.js';
+import { handleDownload } from './download.js';
 import { error } from './log.js';
 
 const MAX_LOGIN_BODY = 10240;
@@ -47,6 +49,12 @@ function methodNotAllowed(res, allow) {
   res.end('method not allowed');
 }
 
+function unauthorized(res) {
+  // Connection: close — an unauthenticated upload's unread body would poison keep-alive
+  res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
+  res.end('auth required');
+}
+
 export function createHttpServer({ authenticate, login, makeSessionCookie, clearSessionCookie, publicDir }) {
   async function handleLogin(req, res) {
     const body = await readBody(req, MAX_LOGIN_BODY);
@@ -63,8 +71,9 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
 
   async function route(req, res) {
     let pathname;
+    let searchParams;
     try {
-      ({ pathname } = new URL(req.url, 'http://x'));
+      ({ pathname, searchParams } = new URL(req.url, 'http://x'));
     } catch {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('not found');
@@ -90,6 +99,26 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
     if (pathname === '/logout') {
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return redirect(res, '/login', clearSessionCookie());
+    }
+
+    if (pathname === '/upload') {
+      if (method !== 'POST') return methodNotAllowed(res, 'POST');
+      const user = authenticate(req);
+      if (!user) return unauthorized(res);
+      return handleUpload(req, res, searchParams, user.username);
+    }
+
+    if (pathname === '/upload/batch') {
+      if (method !== 'POST') return methodNotAllowed(res, 'POST');
+      if (!authenticate(req)) return unauthorized(res);
+      return handleUploadBatch(req, res);
+    }
+
+    if (pathname === '/download') {
+      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
+      const user = authenticate(req);
+      if (!user) return unauthorized(res);
+      return handleDownload(req, res, searchParams, user.username);
     }
 
     if (pathname === '/styles.css' || pathname === '/app.js' || pathname.startsWith('/vendor/')) {
