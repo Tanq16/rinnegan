@@ -3,9 +3,9 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadState, saveState } from './config.js';
+import { loadState, saveState, configDir } from './config.js';
 import { parseCookies, verifySession, signSession, serializeCookie } from './auth.js';
-import { verifyLogin } from './users.js';
+import { verifyLogin, listUsers } from './users.js';
 import { createPtySession } from './pty.js';
 import { createControl } from './control.js';
 import { createHttpServer } from './http.js';
@@ -18,7 +18,7 @@ function startCaddy(root, flags) {
   const caddyfile = flags['caddyfile'] ? path.resolve(flags['caddyfile'])
     : root ? path.join(root, 'Caddyfile') : null;
   const dataDir = flags['caddy-data'] ? path.resolve(flags['caddy-data'])
-    : root ? path.join(root, 'caddy-data') : null;
+    : path.join(configDir(), 'caddy-data');
   if (!caddyBin || !existsSync(caddyBin)) {
     throw new Error(
       `--https requires the bundled Caddy binary; not found at ${caddyBin ?? '<unknown>'}. ` +
@@ -28,7 +28,6 @@ function startCaddy(root, flags) {
   if (!caddyfile || !existsSync(caddyfile)) {
     throw new Error(`--https requires a Caddyfile; not found at ${caddyfile ?? '<unknown>'}.`);
   }
-  if (!dataDir) throw new Error('--https: could not determine a Caddy data directory; pass --caddy-data <path>.');
   return spawn(caddyBin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], {
     stdio: 'inherit',
     env: { ...process.env, XDG_DATA_HOME: dataDir, XDG_CONFIG_HOME: dataDir },
@@ -39,6 +38,18 @@ export function start(cfg, flags = {}) {
   const https = flags.https === true;
   if (https) cfg.cookie.secure = true;
   if (https && cfg.listen.port !== 8442) process.stderr.write(`warning: --https bundled Caddyfile proxies to 127.0.0.1:8442 but listen.port is ${cfg.listen.port}; edit the Caddyfile to match\n`);
+
+  const noAuth = flags['no-auth'] === true;
+  const authOn = !noAuth;
+  if (noAuth) process.stderr.write('warning: --no-auth disables authentication; anyone who reaches the port gets a host shell\n');
+  const userCount = authOn ? (existsSync(cfg.usersFile) ? listUsers(cfg.usersFile).length : 0) : 0;
+  if (authOn && userCount === 0) {
+    error('no users configured; create one with `rinnegan user add --username <name>` or start with --no-auth to disable authentication');
+    process.exit(1);
+  }
+  // A shared session needs at least two accounts to meet in it; a solo or no-auth box is terminal-only.
+  const offerShared = authOn && userCount > 1;
+
   const state = loadState(cfg.stateFile);
   // per-boot signing secret: sessions do not survive restarts (spec persists only mode)
   const secret = randomBytes(32).toString('base64');
@@ -61,10 +72,12 @@ export function start(cfg, flags = {}) {
     maxBufferBytes: cfg.buffer.maxBytes,
   });
 
-  const authenticate = (req) => {
-    const payload = verifySession(parseCookies(req.headers.cookie)[cfg.cookie.name], secret);
-    return payload ? { username: payload.sub, role: payload.role } : null;
-  };
+  const authenticate = noAuth
+    ? () => ({ username: 'nobody', role: 'admin' })
+    : (req) => {
+        const payload = verifySession(parseCookies(req.headers.cookie)[cfg.cookie.name], secret);
+        return payload ? { username: payload.sub, role: payload.role } : null;
+      };
 
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -81,13 +94,15 @@ export function start(cfg, flags = {}) {
     publicDir,
   });
 
-  attachWebSocket(server, { config: cfg, session, control, authenticate });
+  attachWebSocket(server, { config: cfg, session, control, authenticate, offerShared, authOn });
 
-  try {
-    session.spawn();
-  } catch (e) {
-    error(`failed to spawn shell: ${e.message}`);
-    process.exit(1);
+  if (offerShared) {
+    try {
+      session.spawn();
+    } catch (e) {
+      error(`failed to spawn shell: ${e.message}`);
+      process.exit(1);
+    }
   }
 
   // hoisted so an abnormal server exit tears Caddy down instead of orphaning the public :8443 listener

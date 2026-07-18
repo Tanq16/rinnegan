@@ -8,7 +8,7 @@
 
 ---
 
-A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output; users take or request control to type. The shell is a normal interactive shell on the host — for persistence, panes, or long-running work, start `tmux` or `zellij` inside it, in the shared session or a per-user [split session](#split-sessions).
+A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output; users take or request control to type. The shell is a normal interactive shell on the host — for persistence, panes, or long-running work, start `tmux` or `zellij` inside it, in the shared session or a per-user [terminal session](#terminal-sessions).
 
 It is **not** an IDE, a task manager, or a tmux manager — just a shared terminal frontend, like a web-based SSH client for a small trusted team collaborating in one environment. The common use case is a homelab workspace or a cloud VPS.
 
@@ -16,7 +16,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a shared termin
 
 - **Shared, server-owned PTY** — one shell process on the host, streamed live to every browser over WebSocket; no one's local state drifts.
 - **Exactly one keyboard controller** — soft (request/grant) or fast (take instantly); admins can force, release, or switch modes. See [Control](#control).
-- **Per-user split sessions** — your own fresh shell on the same host without disturbing the shared terminal, torn down on disconnect. See [Split sessions](#split-sessions).
+- **Per-user terminal sessions** — your own fresh shell on the same host without disturbing the shared terminal, torn down on disconnect. See [Terminal sessions](#terminal-sessions).
 - **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
 - **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
 - **Self-contained tarball** — each release bundles its own Node runtime and a platform-native `node-pty`; the host needs no Node, Python, compiler, or `make`.
@@ -27,7 +27,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a shared termin
 <details>
 <summary>Click to expand screenshots</summary>
 
-No screenshots yet — this section will be filled in with real captures of the shared terminal, control panel, and split-session chooser in a future update.
+No screenshots yet — this section will be filled in with real captures of the shared terminal, control panel, and terminal-session chooser in a future update.
 
 </details>
 
@@ -41,21 +41,40 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan
 ```
 
-Open **http://127.0.0.1:8442** and log in with the seeded `admin` / `changeme` account. `./bin/rinnegan` with no subcommand runs the server (same as `serve`); it binds `127.0.0.1:8442` and runs as the invoking user. Each tarball is self-contained — its own Node runtime, a platform-native `node-pty`, the `bin/caddy` binary for [HTTPS](#serving-over-https), and third-party licenses under `licenses/` — so the host needs no Node, Python, compiler, or `make`.
+`./bin/rinnegan` with no subcommand runs the server (same as `serve`); it binds `127.0.0.1:8442` and runs as the invoking user. Each tarball is self-contained — its own Node runtime, a platform-native `node-pty`, the `bin/caddy` binary for [HTTPS](#serving-over-https), and third-party licenses under `licenses/` — so the host needs no Node, Python, compiler, or `make`.
 
-**Change the default password immediately** — this is a shell on your machine:
+**First run seeds no user.** Create one before serving — this is a shell on your machine, so pick a real password (input is never echoed):
 
 ```sh
-./bin/rinnegan user passwd --username admin
+./bin/rinnegan user add --username admin --role admin
 ```
 
-It takes effect on the next login without a restart (input is never echoed).
+Then open **http://127.0.0.1:8442** and log in; new users take effect on the next login without a restart. With no user configured, `serve` refuses to start and tells you to add one (or pass `--no-auth`).
+
+**What each tier offers** — rinnegan scales what it serves to the number of accounts:
+
+| Setup | On boot | Users get |
+| ----- | ------- | --------- |
+| 0 users, auth on | refuses to start | — (add a user, or pass `--no-auth`) |
+| 1 user | no shared shell | their own terminal session only |
+| 2+ users | shared shell spawned | Shared **and** terminal sessions, plus the admin panel |
+| `serve --no-auth` | no shared shell | one terminal session as `nobody` (role admin); no login page, no Log out |
+
+`serve --no-auth` disables authentication entirely: the login page is skipped and anyone who reaches the port gets a host shell. It prints a single startup warning and is only for a trusted, isolated box. The shared session — one server-owned PTY several people watch — only makes sense with more than one account, so it appears just in the 2+ user tier.
 
 **macOS.** The launcher best-effort strips `com.apple.quarantine` from the extracted bundle so Gatekeeper doesn't block the bundled `node`. If macOS still balks, download with `curl -fLO <asset-url>` or clear it manually:
 
 ```sh
 xattr -dr com.apple.quarantine rinnegan-<os>-<arch>
 ```
+
+**Updating.** Each bundle ships an `update.sh` that fetches the latest release for your OS/arch. Run it from the install directory:
+
+```sh
+./update.sh
+```
+
+It downloads and verifies the new build in a temp dir before touching anything — a failed download leaves the current install intact — then swaps it in place. Your `~/.config/rinnegan` state is never touched, and it prints a restart reminder rather than restarting the server for you.
 
 ### From source
 
@@ -65,16 +84,15 @@ Contributors work from a checkout, not a tarball:
 git clone https://github.com/Tanq16/rinnegan
 cd rinnegan
 make          # install deps (node-pty from source), vendor assets, verify PTY
-cp config.example.json config.json
-node bin/rinnegan.js user add --config ./config.json --username admin --role admin
-npm run dev   # dev server against ./config.json, restart on change
+node bin/rinnegan.js user add --username admin --role admin
+npm run dev   # dev server reading ~/.config/rinnegan, restart on change
 ```
 
 `make` uses **fnm** for the pinned Node (`.node-version`, 24.17.0) and **uv** for a node-gyp Python. `node-pty` is compiled from source (`npm_config_build_from_source=true`): Linux ships no prebuilt binary, and the macOS prebuild's `spawn-helper` lacks the execute bit and fails at runtime with `posix_spawnp failed`. `make verify` spawns a real PTY and fails loudly on regression. The end-to-end suite (`node test/e2e.mjs`) boots a server and drives it over HTTP + WebSocket.
 
 ## Configuration
 
-`config.json` sits next to the bundle (the launcher passes `--config <bundle>/config.json` unless you supply your own); `users.json` and `state.json` live beside it. The file is deep-merged over built-in defaults, so set only what you change.
+All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of the process working directory): `config.json` is self-seeded from the built-in defaults on first run (mode 0600), `users.json` is operator-created via [`user add`](#cli) and never auto-seeded (mode 0600), and `state.json` (plus `caddy-data/` under `serve --https`) sits alongside. `config.json` is deep-merged over the built-in defaults, so set only what you change.
 
 | Field | Default | Notes |
 | ----- | ------- | ----- |
@@ -84,7 +102,7 @@ npm run dev   # dev server against ./config.json, restart on change
 | `cookie.secure` | `false` | Set `true` over HTTPS; auto-forced under `serve --https` |
 | `cookie.ttlSeconds` | `86400` | 24h session; minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting |
-| `terminal.cwd` | `$HOME` | Omitted from the seed so it defaults to your home directory |
+| `terminal.cwd` | `$HOME` | Falls back to your home directory when unset |
 | `terminal.cols` / `rows` | `120` / `36` | Initial shared grid until the first viewer attaches; after that it follows the smallest attached viewer (see [Control](#control)) |
 | `terminal.autoRestartShell` | `false` | Keep `false`: a dead shell shows a Restart action instead of crash-looping |
 | `terminal.env` | `TERM`, `COLORTERM`, `LANG`/`LC_ALL` | Merged over the server process env |
@@ -92,8 +110,8 @@ npm run dev   # dev server against ./config.json, restart on change
 | `control.staleControllerSeconds` | `120` | Grace period after a controller disconnects |
 | `control.requestTimeoutSeconds` | `60` | Pending control-request expiry |
 | `buffer.maxBytes` | `2097152` | In-memory replay ring buffer (2 MB); minimum 65536 |
-| `usersFile` | `./users.json` | scrypt password records only |
-| `stateFile` | `./state.json` | Persists **only** the current control mode; written mode 0600 |
+| `usersFile` | `./users.json` | scrypt password records; resolved under `~/.config/rinnegan` |
+| `stateFile` | `./state.json` | Persists **only** the current control mode; resolved under `~/.config/rinnegan`, written mode 0600 |
 
 - **Shell.** Defaults to `/usr/bin/env zsh -l`; zsh isn't preinstalled on some minimal Linux distros, so install it or point `terminal.shell` at an existing shell (e.g. `/usr/bin/env bash -l`). The value is split on whitespace into executable + args with no shell quoting, so keep args simple.
 - **Session secret.** The HMAC signing secret is regenerated on every boot and never persisted — restarting invalidates all sessions and everyone re-logs in (deliberate; there is no revocation list). The state file keeps only the control mode.
@@ -109,16 +127,16 @@ npm run dev   # dev server against ./config.json, restart on change
 - **Admins** can take control immediately even in soft mode, force-release the controller, switch mode, restart the shell, and kick all connections (close code 4000, including their own).
 - Non-controller keyboard input is silently ignored server-side.
 
-The whole team shares one grid, sized like tmux to its smallest attached client: every browser renders at a fixed font size (use browser zoom to scale), reports the grid that fits its window, and the shared terminal sizes to the smallest viewer's grid. That viewer fills their window; for everyone else the leftover space is painted in the terminal background as padding, not a letterbox. Joining from a small window shrinks the grid for everyone — deliberate. `terminal.cols`/`rows` are only the initial grid before the first viewer attaches; split sessions size to your own viewport instead.
+The whole team shares one grid, sized like tmux to its smallest attached client: every browser renders at a fixed font size (use browser zoom to scale), reports the grid that fits its window, and the shared terminal sizes to the smallest viewer's grid. That viewer fills their window; for everyone else the leftover space is painted in the terminal background as padding, not a letterbox. Joining from a small window shrinks the grid for everyone — deliberate. `terminal.cols`/`rows` are only the initial grid before the first viewer attaches; terminal sessions size to your own viewport instead.
 
-### Split sessions
+### Terminal sessions
 
-A **split** gives you your own fresh shell on the same host while everyone else keeps the shared terminal.
+A **terminal session** gives you your own fresh shell on the same host while everyone else keeps the shared terminal.
 
-- Every connection starts in a **lobby**: after login you pick **Shared** or **Split**; nothing shows until you choose. A split shell exit returns you to the chooser (noting the exit); an auto-reconnect after a network blip silently rejoins the shared session; a fresh page load always starts at the chooser.
-- **Leave session** (Control panel) returns you to the chooser from either mode. Leaving Shared detaches only *you* — the server-owned shell keeps running for everyone else. Leaving a split ends that shell.
-- Splitting releases control immediately if you held it, and typing in your split never needs control. Keystrokes never cross sessions: input is tagged with its session, and anything in flight during a switch is dropped, not misdelivered.
-- A split lives only while you are attached — switching to Shared, closing the tab, or losing the connection kills it, with no scrollback or reattach. Durability is tmux's job: start `tmux` inside a split and it daemonizes out of the split's process tree, so reconnect → Split → `tmux attach` resumes your work.
+- Every connection starts in a **lobby**: after login you pick **Shared** or **Terminal** (a solo or `--no-auth` deployment offers only Terminal); nothing shows until you choose. A terminal-session shell exit returns you to the chooser (noting the exit); an auto-reconnect after a network blip silently rejoins the shared session; a fresh page load always starts at the chooser.
+- **Leave session** (Control panel) returns you to the chooser from either mode. Leaving Shared detaches only *you* — the server-owned shell keeps running for everyone else. Leaving a terminal session ends that shell.
+- Switching to your terminal session releases control immediately if you held it, and typing in it never needs control. Keystrokes never cross sessions: input is tagged with its session, and anything in flight during a switch is dropped, not misdelivered.
+- A terminal session lives only while you are attached — switching to Shared, closing the tab, or losing the connection kills it, with no scrollback or reattach. Durability is tmux's job: start `tmux` inside it and it daemonizes out of the session's process tree, so reconnect → Terminal → `tmux attach` resumes your work.
 - It is your own *shell*, not a sandbox: same OS user, filesystem, and visible processes as the shared session. Treat it with the same care.
 
 ### File transfer
@@ -145,28 +163,28 @@ Bytes are streamed to disk with a `POST`, with **no size cap** and a live progre
 
 ### CLI
 
-The launcher forwards arguments and injects `--config <bundle>/config.json` when you do not pass `--config`:
+The launcher forwards its arguments straight to the bundled server:
 
 ```
 ./bin/rinnegan                              # start the server (default: serve)
-./bin/rinnegan serve                        # start the server explicitly
+./bin/rinnegan serve [--https] [--no-auth]  # serve; --no-auth disables all authentication
 ./bin/rinnegan user add    --username <name> [--role admin|user]
 ./bin/rinnegan user passwd --username <name>
 ./bin/rinnegan user list
 ```
 
-`--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart.
+`--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart. `serve` refuses to start with zero users unless `--no-auth` is given.
 
 ### Security
 
 **Treat rinnegan like SSH access — it is a shell on the machine it runs on.**
 
 - Binds **`127.0.0.1`** by default; keep it there unless a properly authenticated, TLS-terminating proxy is in front.
-- Auth is required everywhere; WebSocket upgrades are validated before completing and rejected with close code 4401 when unauthenticated.
+- Auth is required everywhere by default: WebSocket upgrades are validated before completing and rejected with close code 4401 when unauthenticated. `serve --no-auth` is the one deliberate exception — it disables all authentication and hands a host shell to anyone who reaches the port, so use it only on a trusted, isolated box.
 - Only scrypt password hashes are stored; passwords and session tokens are never logged.
 - **No login rate limiting** — do not expose beyond a trusted network without HTTPS and network-level access controls.
-- **Change the default `admin` / `changeme` password immediately.**
-- `config.json`, `users.json`, and `state.json` should be readable only by the running user (the seed writes `users.json` mode 0600).
+- **No user is seeded on first run** — create accounts with `user add`, and pick strong passwords; `serve` refuses to start with zero users unless `--no-auth` is set.
+- `~/.config/rinnegan` and its `config.json`, `users.json`, and `state.json` should be readable only by the running user (rinnegan creates the directory mode 0700 and those files mode 0600).
 
 Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bound rinnegan`. The bundled wrapper below is the fastest way there.
 
@@ -179,7 +197,7 @@ Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bou
 Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LICENSE`). This runs Caddy as a **managed child process** listening on `0.0.0.0:8443` and reverse-proxying to `127.0.0.1:8442`, so rinnegan itself stays localhost-only. Browse to **https://\<host\>:8443**, accept the one-time self-signed warning, and log in. `cookie.secure` is forced to `true` in this mode.
 
 - **Certificate:** issued by Caddy's internal CA, so browsers warn once per client; removing the warning means installing the CA on every client (out of scope).
-- **State:** Caddy's CA and certs live in `caddy-data/` inside the bundle (via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`); delete it and restart to regenerate the CA.
+- **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/` (via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`); delete it and restart to regenerate the CA.
 - **Ports:** if you change `listen.port`, edit the bundled `Caddyfile` so its `reverse_proxy` target matches (`serve --https` warns if the port is not `8442`).
 - **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
 - **Still no rate limiting** even over HTTPS — keep it on a trusted network.

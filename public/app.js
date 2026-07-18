@@ -55,6 +55,7 @@
     requestBar: $('request-bar'), requestText: $('request-text'),
     grantBtn: $('grant-btn'), denyBtn: $('deny-btn'),
     endedBar: $('ended-bar'), endedRestart: $('ended-restart'),
+    logoutForm: $('logout-form'),
     overlay: $('overlay'), overlayMsg: $('overlay-msg'), reconnectBtn: $('reconnect-btn'),
     chooser: $('chooser'), chooserNote: $('chooser-note'), chooserInfo: $('chooser-info'),
     chooseShared: $('choose-shared'), chooseSplit: $('choose-split'),
@@ -82,6 +83,8 @@
   let toastTimer = null;
   let backoffIdx = 0;
   let me = { username: null, role: null };
+  let offerShared = false; // server tier: false ⇒ terminal-only lobby, no shared session or admin panel
+  let authOn = true;
   let grid = { cols: 120, rows: 36 };
   let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
   let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
@@ -206,6 +209,8 @@
 
   function onHello(msg) {
     me = msg.you;
+    offerShared = msg.offerShared === true;
+    authOn = msg.authOn === true;
     grid = { cols: msg.size.cols, rows: msg.size.rows };
     state = msg.state;
     sess = 'lobby'; // no replay follows hello
@@ -221,7 +226,7 @@
     } else {
       term.reset(); // the shared mode reply's replay (if any) rebuilds the grid
     }
-    if (lastSess === 'shared') {
+    if (offerShared && lastSess === 'shared') {
       // silent rejoin after an auto-reconnect: the mode reply + replay restores the terminal, skipping the chooser
       const want = computeNatural() || {}; // absent size: server uses config
       send({ t: 'shared', cols: want.cols, rows: want.rows });
@@ -392,11 +397,11 @@
 
     const shared = sess === 'shared';
     const split = sess === 'split';
-    els.pSession.textContent = sess;
+    els.pSession.textContent = split ? 'Terminal' : sess;
     els.pSession.dataset.mode = sess;
-    els.sessionBtn.hidden = sess === 'lobby'; // the chooser owns lobby transitions
-    els.sessionBtn.textContent = split ? 'Return to shared' : 'Split session';
-    els.leaveBtn.hidden = sess === 'lobby'; // already at the chooser
+    els.sessionBtn.hidden = sess === 'lobby' || !offerShared;
+    els.sessionBtn.textContent = split ? 'Return to shared' : 'Terminal session';
+    els.leaveBtn.hidden = sess === 'lobby';
     els.sessionBadge.hidden = !shared;
 
     // input gating is shared-only: split is your own shell, lobby has no session
@@ -418,9 +423,10 @@
     els.releaseBtn.hidden = !canRelease;
     els.releaseBtn.textContent = ctrl ? 'Release Control' : 'Force Release';
 
-    els.adminSection.hidden = !isAdmin();
+    els.adminSection.hidden = !(isAdmin() && offerShared);
     els.modeSelect.value = state.mode;
     els.endedRestart.hidden = !isAdmin();
+    els.logoutForm.hidden = !authOn;
 
     els.chooserInfo.textContent = state.viewers + (state.viewers === 1 ? ' viewer' : ' viewers')
       + ' · controller: ' + (state.controller ?? 'none');
@@ -454,8 +460,10 @@
   function showChooser(note) {
     els.chooserNote.textContent = note ?? '';
     els.chooserNote.hidden = !note;
+    els.chooseShared.hidden = !offerShared;
+    els.chooserInfo.hidden = !offerShared;
     els.chooser.hidden = false;
-    els.chooseShared.focus();
+    (offerShared ? els.chooseShared : els.chooseSplit).focus();
   }
 
   function hideChooser() {

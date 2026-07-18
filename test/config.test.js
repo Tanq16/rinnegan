@@ -1,23 +1,32 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { loadConfig, loadState, saveState } from '../src/config.js';
 
-let dir;
-before(() => { dir = mkdtempSync(path.join(tmpdir(), 'rinnegan-config-')); });
-after(() => { rmSync(dir, { recursive: true, force: true }); });
+let dir, prevHome, CONFIG_DIR;
+before(() => {
+  prevHome = process.env.HOME;
+  dir = mkdtempSync(path.join(tmpdir(), 'rinnegan-config-'));
+  process.env.HOME = dir;
+  CONFIG_DIR = path.join(dir, '.config', 'rinnegan');
+  mkdirSync(CONFIG_DIR, { recursive: true });
+});
+after(() => {
+  if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+  rmSync(dir, { recursive: true, force: true });
+});
 
+const configFile = () => path.join(CONFIG_DIR, 'config.json');
 function writeConfig(value) {
-  const p = path.join(dir, `cfg-${randomBytes(6).toString('hex')}.json`);
-  writeFileSync(p, typeof value === 'string' ? value : JSON.stringify(value));
-  return p;
+  writeFileSync(configFile(), typeof value === 'string' ? value : JSON.stringify(value));
 }
 
 test('loadConfig fills defaults from a minimal config', () => {
-  const cfg = loadConfig(writeConfig({}));
+  writeConfig({});
+  const cfg = loadConfig();
   assert.equal(cfg.listen.port, 8442);
   assert.equal(cfg.listen.host, '127.0.0.1');
   assert.equal(cfg.cookie.name, 'rinnegan');
@@ -29,54 +38,73 @@ test('loadConfig fills defaults from a minimal config', () => {
   assert.equal(cfg.buffer.maxBytes, 2097152);
   assert.equal(typeof cfg.terminal.cwd, 'string');
   assert.ok(cfg.terminal.cwd.length > 0);
-  assert.ok(path.isAbsolute(cfg.usersFile));
-  assert.ok(path.isAbsolute(cfg.stateFile));
+  assert.equal(cfg.usersFile, path.join(CONFIG_DIR, 'users.json'));
+  assert.equal(cfg.stateFile, path.join(CONFIG_DIR, 'state.json'));
+});
+
+test('loadConfig seeds a 0600 config.json from defaults when it is missing', () => {
+  rmSync(configFile(), { force: true });
+  assert.equal(existsSync(configFile()), false);
+  const cfg = loadConfig();
+  assert.equal(existsSync(configFile()), true);
+  assert.equal(statSync(configFile()).mode & 0o777, 0o600);
+  assert.equal(cfg.listen.port, 8442);
+  assert.equal(cfg.usersFile, path.join(CONFIG_DIR, 'users.json'));
+  assert.equal(cfg.stateFile, path.join(CONFIG_DIR, 'state.json'));
 });
 
 test('loadConfig deep-merges nested overrides while keeping sibling defaults', () => {
-  const cfg = loadConfig(writeConfig({ cookie: { secure: true } }));
+  writeConfig({ cookie: { secure: true } });
+  const cfg = loadConfig();
   assert.equal(cfg.cookie.secure, true);
   assert.equal(cfg.cookie.name, 'rinnegan');
   assert.equal(cfg.cookie.ttlSeconds, 86400);
 });
 
 test('loadConfig merges a deeply nested object keeping unmentioned keys', () => {
-  const cfg = loadConfig(writeConfig({ terminal: { env: { TERM: 'screen-256color' } } }));
+  writeConfig({ terminal: { env: { TERM: 'screen-256color' } } });
+  const cfg = loadConfig();
   assert.equal(cfg.terminal.env.TERM, 'screen-256color');
   assert.equal(cfg.terminal.env.COLORTERM, 'truecolor');
   assert.equal(cfg.terminal.env.LANG, 'en_US.UTF-8');
 });
 
 test('loadConfig treats an empty object override as no change', () => {
-  const cfg = loadConfig(writeConfig({ terminal: {} }));
+  writeConfig({ terminal: {} });
+  const cfg = loadConfig();
   assert.equal(cfg.terminal.shell, '/usr/bin/env zsh -l');
   assert.equal(cfg.terminal.rows, 36);
 });
 
 test('loadConfig keeps an explicit terminal.cwd override', () => {
-  const cfg = loadConfig(writeConfig({ terminal: { cwd: '/tmp/somewhere' } }));
+  writeConfig({ terminal: { cwd: '/tmp/somewhere' } });
+  const cfg = loadConfig();
   assert.equal(cfg.terminal.cwd, '/tmp/somewhere');
 });
 
-test('loadConfig resolves relative users/state paths against the config directory', () => {
-  const cfg = loadConfig(writeConfig({ usersFile: './creds.json', stateFile: '../shared/state.json' }));
-  assert.equal(cfg.usersFile, path.resolve(dir, './creds.json'));
-  assert.equal(cfg.stateFile, path.resolve(dir, '../shared/state.json'));
+test('loadConfig resolves relative users/state paths against the config dir', () => {
+  writeConfig({ usersFile: './creds.json', stateFile: '../shared/state.json' });
+  const cfg = loadConfig();
+  assert.equal(cfg.usersFile, path.resolve(CONFIG_DIR, './creds.json'));
+  assert.equal(cfg.stateFile, path.resolve(CONFIG_DIR, '../shared/state.json'));
 });
 
 test('loadConfig ignores a __proto__ key without polluting Object.prototype', () => {
-  const p = writeConfig('{"__proto__":{"polluted":true},"listen":{"port":9000}}');
-  const cfg = loadConfig(p);
+  writeConfig('{"__proto__":{"polluted":true},"listen":{"port":9000}}');
+  const cfg = loadConfig();
   assert.equal(cfg.listen.port, 9000);
   assert.equal({}.polluted, undefined);
 });
 
-test('loadConfig throws on unreadable, malformed, or non-object input', () => {
-  assert.throws(() => loadConfig(path.join(dir, 'does-not-exist.json')), /cannot read config file/);
-  assert.throws(() => loadConfig(writeConfig('{ not json')), /invalid JSON in config file/);
-  assert.throws(() => loadConfig(writeConfig('[]')), /config must be a JSON object/);
-  assert.throws(() => loadConfig(writeConfig('5')), /config must be a JSON object/);
-  assert.throws(() => loadConfig(writeConfig({ listen: 5 })), /listen must be an object/);
+test('loadConfig throws on malformed or non-object input', () => {
+  writeConfig('{ not json');
+  assert.throws(() => loadConfig(), /invalid JSON in config file/);
+  writeConfig('[]');
+  assert.throws(() => loadConfig(), /config must be a JSON object/);
+  writeConfig('5');
+  assert.throws(() => loadConfig(), /config must be a JSON object/);
+  writeConfig({ listen: 5 });
+  assert.throws(() => loadConfig(), /listen must be an object/);
 });
 
 test('loadConfig validation boundaries', async (t) => {
@@ -106,9 +134,9 @@ test('loadConfig validation boundaries', async (t) => {
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
-      const p = writeConfig(c.over);
-      if (c.err) assert.throws(() => loadConfig(p), c.err);
-      else assert.doesNotThrow(() => loadConfig(p));
+      writeConfig(c.over);
+      if (c.err) assert.throws(() => loadConfig(), c.err);
+      else assert.doesNotThrow(() => loadConfig());
     });
   }
 });

@@ -37,18 +37,5 @@ if [ "$(uname -s)" = "Darwin" ]; then
   xattr -d -r com.apple.quarantine "$ROOT" >/dev/null 2>&1 || true
 fi
 
-# Inject a default --config unless the user supplied one, so bare `rinnegan` works.
-HAS_CONFIG=0
-for arg in "$@"; do
-  if [ "$arg" = "--config" ]; then
-    HAS_CONFIG=1
-    break
-  fi
-done
-
 # exec so signals (SIGINT/SIGTERM) propagate to node and PID stays stable.
-if [ "$HAS_CONFIG" -eq 1 ]; then
-  exec "$NODE" "$APP" "$@"
-else
-  exec "$NODE" "$APP" "$@" --config "$ROOT/config.json"
-fi
+exec "$NODE" "$APP" "$@"

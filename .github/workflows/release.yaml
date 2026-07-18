@@ -63,7 +63,7 @@ jobs:
             --title "${{ steps.version.outputs.version }}" \
             --draft \
             --target "${{ github.sha }}" \
-            --notes "Self-contained rinnegan release ${{ steps.version.outputs.version }}. Each tarball bundles its own Node 24.17.0 runtime and a platform-native node-pty. Download the asset for your platform (linux-x64, linux-arm64, darwin-x64, darwin-arm64), extract, and run ./bin/rinnegan. Default login is admin / changeme; change it after first run."
+            --notes "Self-contained rinnegan release ${{ steps.version.outputs.version }}. Each tarball bundles its own Node 24.17.0 runtime and a platform-native node-pty. Download the asset for your platform (linux-x64, linux-arm64, darwin-x64, darwin-arm64), extract, and run ./bin/rinnegan. No user is seeded: create one with ./bin/rinnegan user add --username <name> --role admin, or run ./bin/rinnegan serve --no-auth to disable authentication."
           echo "release_created=true" >> "$GITHUB_OUTPUT"
 
   build:

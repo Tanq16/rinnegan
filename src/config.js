@@ -1,5 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import os from 'node:os';
 
 const DEFAULTS = {
   listen: { host: '127.0.0.1', port: 8442 },
@@ -41,19 +43,37 @@ function check(cond, msg) {
   if (!cond) throw new Error('invalid config: ' + msg);
 }
 
-export function loadConfig(configPath) {
-  const abs = path.resolve(configPath);
+function atomicWriteFileSync(file, data, mode) {
+  const tmp = file + '.' + randomBytes(6).toString('hex') + '.tmp';
+  writeFileSync(tmp, data, { mode });
+  renameSync(tmp, file);
+}
+
+export function configDir() {
+  const home = os.homedir();
+  if (!home || !path.isAbsolute(home)) {
+    throw new Error('cannot determine an absolute home directory; set HOME to an absolute path');
+  }
+  return path.join(home, '.config', 'rinnegan');
+}
+
+export function loadConfig() {
+  const dir = configDir();
+  const configFile = path.join(dir, 'config.json');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   let raw;
   try {
-    raw = readFileSync(abs, 'utf8');
+    raw = readFileSync(configFile, 'utf8');
   } catch (e) {
-    throw new Error(`cannot read config file ${abs}: ${e.message}`);
+    if (e.code !== 'ENOENT') throw new Error(`cannot read config file ${configFile}: ${e.message}`);
+    raw = JSON.stringify(DEFAULTS, null, 2) + '\n';
+    atomicWriteFileSync(configFile, raw, 0o600);
   }
   let user;
   try {
     user = JSON.parse(raw);
   } catch (e) {
-    throw new Error(`invalid JSON in config file ${abs}: ${e.message}`);
+    throw new Error(`invalid JSON in config file ${configFile}: ${e.message}`);
   }
   check(isPlainObject(user), 'config must be a JSON object');
 
@@ -102,16 +122,14 @@ export function loadConfig(configPath) {
 
   if (cfg.terminal.cwd == null) cfg.terminal.cwd = process.env.HOME || process.cwd();
 
-  // Relative users/state paths resolve against the config file's directory.
-  const configDir = path.dirname(abs);
-  cfg.usersFile = path.resolve(configDir, cfg.usersFile);
-  cfg.stateFile = path.resolve(configDir, cfg.stateFile);
+  cfg.usersFile = path.resolve(dir, cfg.usersFile);
+  cfg.stateFile = path.resolve(dir, cfg.stateFile);
 
   return cfg;
 }
 
 function writeStateFile(stateFile, state) {
-  writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+  atomicWriteFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', 0o600);
 }
 
 export function loadState(stateFile) {

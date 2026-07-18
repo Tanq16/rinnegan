@@ -4,7 +4,7 @@ import { spawnRawPty } from './pty.js';
 const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
 
-export function attachWebSocket(httpServer, { config, session, control, authenticate }) {
+export function attachWebSocket(httpServer, { config, session, control, authenticate, offerShared, authOn }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
   const sockets = new Map();
 
@@ -240,6 +240,7 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
         break;
       }
       case 'shared':
+        if (!offerShared) return send(ws, { t: 'error', msg: 'shared session unavailable' });
         if (meta.mode === 'shared') break;
         killSplit(meta);
         returnToShared(ws, meta, msg.cols, msg.rows);
@@ -270,15 +271,19 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
         break;
       case 'mode':
         if (!isAdmin) return send(ws, { t: 'error', msg: 'admin only' });
+        if (!offerShared) break;
         if (msg.mode !== 'fast' && msg.mode !== 'soft') return send(ws, { t: 'error', msg: 'invalid mode' });
         control.setMode(msg.mode);
         break;
       case 'restart':
         if (!isAdmin) return send(ws, { t: 'error', msg: 'admin only' });
+        // Without a shared tier there is no PTY to restart; doRestart would session.restart() and spawn an orphan.
+        if (!offerShared) break;
         doRestart(ws);
         break;
       case 'kickAll':
         if (!isAdmin) return send(ws, { t: 'error', msg: 'admin only' });
+        if (!offerShared) break;
         // kill splits NOW: close() only starts the handshake, which a dead peer may never complete
         for (const [s, m] of [...sockets]) {
           killSplit(m);
@@ -311,6 +316,8 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
       size: session.getSize(),
       state: stateSnapshot(),
       epoch: meta.epoch,
+      offerShared,
+      authOn,
     });
     broadcastState();
 
