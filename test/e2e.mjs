@@ -362,6 +362,15 @@ async function main() {
       assert.ok((res.headers.get('content-type') || '').includes('text/html'));
     });
 
+    await check('vendored css and fonts are served (terminal glyphs depend on it)', async () => {
+      const css = await get('/css/jetbrains-mono.css');
+      assert.equal(css.status, 200, '/css must be served, else the Nerd Font never loads');
+      assert.ok((css.headers.get('content-type') || '').includes('text/css'), '/css wrong content-type');
+      const font = await get('/fonts/JetBrainsMonoNerdFontMono-Regular.woff2');
+      assert.equal(font.status, 200, '/fonts woff2 must be served');
+      assert.equal(font.headers.get('content-type'), 'font/woff2', 'woff2 wrong content-type');
+    });
+
     await check('POST /login wrong password redirects with error', async () => {
       const res = await post('/login', { username: 'tanish', password: 'wrong-password' });
       assert.equal(res.status, 302);
