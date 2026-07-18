@@ -121,7 +121,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return handleDownload(req, res, searchParams, user.username);
     }
 
-    if (pathname === '/styles.css' || pathname === '/app.js' || pathname.startsWith('/vendor/')) {
+    if (pathname === '/styles.css' || pathname === '/app.js' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
       return serveStatic(req, res, publicDir, pathname);
     }
