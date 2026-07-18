@@ -38,8 +38,16 @@ tar xzf "$TARBALL" -C "$SMOKE_DIR"
 APP_DIR="$SMOKE_DIR/$BUNDLE_NAME"
 [ -x "$APP_DIR/bin/rinnegan" ] || die "launcher missing/not executable"
 [ -x "$APP_DIR/runtime/bin/node" ] || die "bundled node missing/not executable"
+[ -x "$APP_DIR/update.sh" ] || die "update.sh missing or not executable"
 
 cd "$APP_DIR"
+
+# serve now self-seeds config/state into ~/.config/rinnegan; sandbox HOME so it lands in the temp dir, never the real home.
+SMOKE_HOME="$SMOKE_DIR/home"
+mkdir -p "$SMOKE_HOME"
+
+# The updater's verify gate is `rinnegan version`; exercise it so a tarball that would brick self-update can't ship undetected.
+env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin "$APP_DIR/bin/rinnegan" version >/dev/null || die "rinnegan version failed; updater verify gate would fail"
 
 SERVER_PID=""
 HTTPS_PID=""
@@ -52,7 +60,7 @@ trap cleanup EXIT
 
 # node-pty's darwin prebuild fails at spawn() time, not import time, so only a real spawn catches it.
 # cd lib so the bare specifier resolves the bundle's node_modules, not the repo's.
-if ! ( cd lib && env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
+if ! ( cd lib && env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
   ../runtime/bin/node --input-type=module -e "
 import pty from 'node-pty';
 const bail = setTimeout(() => process.exit(1), 10000);
@@ -66,7 +74,7 @@ fi
 echo "node-pty spawns a real PTY -> OK"
 
 # --no-auth boots headlessly with no seeded user; the scrubbed PATH proves the bundled runtime is used.
-env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
+env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
   ./bin/rinnegan serve --no-auth > server.log 2>&1 &
 SERVER_PID=$!
 
@@ -98,7 +106,7 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 
 # Caddy is invoked by absolute path via RINNEGAN_ROOT, so the scrubbed PATH does not affect it.
-env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
+env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
   ./bin/rinnegan serve --https --no-auth > https.log 2>&1 &
 HTTPS_PID=$!
 

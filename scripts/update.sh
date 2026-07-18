@@ -43,7 +43,8 @@ while [ -L "$SOURCE" ]; do
 done
 INSTALL_DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
 
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/rinnegan-update.XXXXXX")"
+# Stage beside the install dir, not in /tmp: the swap below must be a same-filesystem atomic rename, not a cross-device copy.
+WORKDIR="$(mktemp -d "$(dirname -- "$INSTALL_DIR")/.rinnegan-update.XXXXXX")"
 cleanup() { rm -rf -- "$WORKDIR"; }
 trap cleanup EXIT
 
