@@ -3,6 +3,8 @@ name: release
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -21,13 +23,22 @@ jobs:
         with:
           node-version: 24.17.0
 
-      # Unit suites use only node: builtins + src/, so they run without installing node_modules.
+      # e2e boots bin/rinnegan.js over http+ws and spawns a PTY, so it needs ws + a source-built node-pty.
+      - name: Install dependencies (compile node-pty native from source)
+        run: npm_config_build_from_source=true npm ci
+
       - name: Run unit tests
         run: npm test
+
+      # A distinct step, never folded into the unit suite: it stands up a live server over http+ws.
+      - name: Run end-to-end tests
+        run: node test/e2e.mjs
 
   create-release:
     name: create-release
     needs: test
+    # PRs run the test gate only; skipping here cascades to build/publish via needs, so no PR ever publishes.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
