@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { addUser, setPassword, listUsers } from '../src/users.js';
 import { start } from '../src/server.js';
@@ -10,6 +11,7 @@ const USAGE = `usage:
   rinnegan user add --username <name> [--role admin|user]
   rinnegan user passwd --username <name>
   rinnegan user list
+  rinnegan version
 `;
 
 const BOOLEAN_FLAGS = new Set(['https', 'no-auth']);
@@ -124,6 +126,11 @@ function userList() {
   }
 }
 
+function printVersion() {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  process.stdout.write(`${pkg.version}\n`);
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   const command = positional.length === 0 ? 'serve' : positional.join(' ');
@@ -137,6 +144,8 @@ async function main() {
       return userPasswd(flags);
     case 'user list':
       return userList();
+    case 'version':
+      return printVersion();
     default:
       usageExit();
   }

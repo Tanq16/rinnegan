@@ -68,6 +68,14 @@ Then open **http://127.0.0.1:8442** and log in; new users take effect on the nex
 xattr -dr com.apple.quarantine rinnegan-<os>-<arch>
 ```
 
+**Updating.** Each bundle ships an `update.sh` that fetches the latest release for your OS/arch. Run it from the install directory:
+
+```sh
+./update.sh
+```
+
+It downloads and verifies the new build in a temp dir before touching anything — a failed download leaves the current install intact — then swaps it in place. Your `~/.config/rinnegan` state is never touched, and it prints a restart reminder rather than restarting the server for you.
+
 ### From source
 
 Contributors work from a checkout, not a tarball:

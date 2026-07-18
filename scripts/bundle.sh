@@ -31,7 +31,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile LICENSE README.md; do
+for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile LICENSE README.md package.json scripts/update.sh; do
   [ -e "$REPO_ROOT/$req" ] || die "missing required repo path: $req"
 done
 
@@ -62,8 +62,14 @@ cp -R "$REPO_ROOT/src/."          "$BUNDLE_ROOT/lib/src/"
 cp -R "$REPO_ROOT/public/."       "$BUNDLE_ROOT/lib/public/"
 cp -R "$REPO_ROOT/node_modules/." "$BUNDLE_ROOT/lib/node_modules/"
 
+# `rinnegan version` reads this at runtime (the updater's verify gate), so it must ship in lib/.
+cp "$REPO_ROOT/package.json" "$BUNDLE_ROOT/lib/package.json"
+
 cp "$REPO_ROOT/launcher/rinnegan" "$BUNDLE_ROOT/bin/rinnegan"
 chmod 755 "$BUNDLE_ROOT/bin/rinnegan"
+
+cp "$REPO_ROOT/scripts/update.sh" "$BUNDLE_ROOT/update.sh"
+chmod 755 "$BUNDLE_ROOT/update.sh"
 
 cp "$REPO_ROOT/LICENSE"   "$BUNDLE_ROOT/LICENSE"
 cp "$REPO_ROOT/README.md" "$BUNDLE_ROOT/README.md"
