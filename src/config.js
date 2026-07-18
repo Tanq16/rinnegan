@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 
@@ -42,8 +43,18 @@ function check(cond, msg) {
   if (!cond) throw new Error('invalid config: ' + msg);
 }
 
+function atomicWriteFileSync(file, data, mode) {
+  const tmp = file + '.' + randomBytes(6).toString('hex') + '.tmp';
+  writeFileSync(tmp, data, { mode });
+  renameSync(tmp, file);
+}
+
 export function configDir() {
-  return path.join(os.homedir(), '.config', 'rinnegan');
+  const home = os.homedir();
+  if (!home || !path.isAbsolute(home)) {
+    throw new Error('cannot determine an absolute home directory; set HOME to an absolute path');
+  }
+  return path.join(home, '.config', 'rinnegan');
 }
 
 export function loadConfig() {
@@ -56,7 +67,7 @@ export function loadConfig() {
   } catch (e) {
     if (e.code !== 'ENOENT') throw new Error(`cannot read config file ${configFile}: ${e.message}`);
     raw = JSON.stringify(DEFAULTS, null, 2) + '\n';
-    writeFileSync(configFile, raw, { mode: 0o600 });
+    atomicWriteFileSync(configFile, raw, 0o600);
   }
   let user;
   try {
@@ -118,7 +129,7 @@ export function loadConfig() {
 }
 
 function writeStateFile(stateFile, state) {
-  writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+  atomicWriteFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', 0o600);
 }
 
 export function loadState(stateFile) {

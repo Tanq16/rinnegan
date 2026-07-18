@@ -226,7 +226,7 @@
     } else {
       term.reset(); // the shared mode reply's replay (if any) rebuilds the grid
     }
-    if (lastSess === 'shared') {
+    if (offerShared && lastSess === 'shared') {
       // silent rejoin after an auto-reconnect: the mode reply + replay restores the terminal, skipping the chooser
       const want = computeNatural() || {}; // absent size: server uses config
       send({ t: 'shared', cols: want.cols, rows: want.rows });

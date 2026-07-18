@@ -71,7 +71,7 @@ if ! mv -- "$NEW_DIR" "$INSTALL_DIR"; then
 fi
 
 if ! "$INSTALL_DIR/bin/rinnegan" version >/dev/null 2>&1; then
-  rm -rf -- "$INSTALL_DIR"
+  rm -rf -- "$INSTALL_DIR" || true
   mv -- "$BACKUP_DIR" "$INSTALL_DIR"
   die "new install failed its boot check; rolled back to the previous version"
 fi

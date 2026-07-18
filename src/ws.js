@@ -271,6 +271,7 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
         break;
       case 'mode':
         if (!isAdmin) return send(ws, { t: 'error', msg: 'admin only' });
+        if (!offerShared) break;
         if (msg.mode !== 'fast' && msg.mode !== 'soft') return send(ws, { t: 'error', msg: 'invalid mode' });
         control.setMode(msg.mode);
         break;
@@ -282,6 +283,7 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
         break;
       case 'kickAll':
         if (!isAdmin) return send(ws, { t: 'error', msg: 'admin only' });
+        if (!offerShared) break;
         // kill splits NOW: close() only starts the handshake, which a dead peer may never complete
         for (const [s, m] of [...sockets]) {
           killSplit(m);
