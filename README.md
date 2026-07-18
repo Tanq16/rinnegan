@@ -65,16 +65,15 @@ Contributors work from a checkout, not a tarball:
 git clone https://github.com/Tanq16/rinnegan
 cd rinnegan
 make          # install deps (node-pty from source), vendor assets, verify PTY
-cp config.example.json config.json
-node bin/rinnegan.js user add --config ./config.json --username admin --role admin
-npm run dev   # dev server against ./config.json, restart on change
+node bin/rinnegan.js user add --username admin --role admin
+npm run dev   # dev server reading ~/.config/rinnegan, restart on change
 ```
 
 `make` uses **fnm** for the pinned Node (`.node-version`, 24.17.0) and **uv** for a node-gyp Python. `node-pty` is compiled from source (`npm_config_build_from_source=true`): Linux ships no prebuilt binary, and the macOS prebuild's `spawn-helper` lacks the execute bit and fails at runtime with `posix_spawnp failed`. `make verify` spawns a real PTY and fails loudly on regression. The end-to-end suite (`node test/e2e.mjs`) boots a server and drives it over HTTP + WebSocket.
 
 ## Configuration
 
-`config.json` sits next to the bundle (the launcher passes `--config <bundle>/config.json` unless you supply your own); `users.json` and `state.json` live beside it. The file is deep-merged over built-in defaults, so set only what you change.
+All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of the process working directory): `config.json` is self-seeded from the built-in defaults on first run (mode 0600), `users.json` is operator-created via [`user add`](#cli) and never auto-seeded (mode 0600), and `state.json` (plus `caddy-data/` under `serve --https`) sits alongside. `config.json` is deep-merged over the built-in defaults, so set only what you change.
 
 | Field | Default | Notes |
 | ----- | ------- | ----- |
@@ -84,7 +83,7 @@ npm run dev   # dev server against ./config.json, restart on change
 | `cookie.secure` | `false` | Set `true` over HTTPS; auto-forced under `serve --https` |
 | `cookie.ttlSeconds` | `86400` | 24h session; minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting |
-| `terminal.cwd` | `$HOME` | Omitted from the seed so it defaults to your home directory |
+| `terminal.cwd` | `$HOME` | Falls back to your home directory when unset |
 | `terminal.cols` / `rows` | `120` / `36` | Initial shared grid until the first viewer attaches; after that it follows the smallest attached viewer (see [Control](#control)) |
 | `terminal.autoRestartShell` | `false` | Keep `false`: a dead shell shows a Restart action instead of crash-looping |
 | `terminal.env` | `TERM`, `COLORTERM`, `LANG`/`LC_ALL` | Merged over the server process env |
@@ -92,8 +91,8 @@ npm run dev   # dev server against ./config.json, restart on change
 | `control.staleControllerSeconds` | `120` | Grace period after a controller disconnects |
 | `control.requestTimeoutSeconds` | `60` | Pending control-request expiry |
 | `buffer.maxBytes` | `2097152` | In-memory replay ring buffer (2 MB); minimum 65536 |
-| `usersFile` | `./users.json` | scrypt password records only |
-| `stateFile` | `./state.json` | Persists **only** the current control mode; written mode 0600 |
+| `usersFile` | `./users.json` | scrypt password records; resolved under `~/.config/rinnegan` |
+| `stateFile` | `./state.json` | Persists **only** the current control mode; resolved under `~/.config/rinnegan`, written mode 0600 |
 
 - **Shell.** Defaults to `/usr/bin/env zsh -l`; zsh isn't preinstalled on some minimal Linux distros, so install it or point `terminal.shell` at an existing shell (e.g. `/usr/bin/env bash -l`). The value is split on whitespace into executable + args with no shell quoting, so keep args simple.
 - **Session secret.** The HMAC signing secret is regenerated on every boot and never persisted — restarting invalidates all sessions and everyone re-logs in (deliberate; there is no revocation list). The state file keeps only the control mode.
@@ -145,7 +144,7 @@ Bytes are streamed to disk with a `POST`, with **no size cap** and a live progre
 
 ### CLI
 
-The launcher forwards arguments and injects `--config <bundle>/config.json` when you do not pass `--config`:
+The launcher forwards its arguments straight to the bundled server:
 
 ```
 ./bin/rinnegan                              # start the server (default: serve)
@@ -166,7 +165,7 @@ The launcher forwards arguments and injects `--config <bundle>/config.json` when
 - Only scrypt password hashes are stored; passwords and session tokens are never logged.
 - **No login rate limiting** — do not expose beyond a trusted network without HTTPS and network-level access controls.
 - **Change the default `admin` / `changeme` password immediately.**
-- `config.json`, `users.json`, and `state.json` should be readable only by the running user (the seed writes `users.json` mode 0600).
+- `~/.config/rinnegan` and its `config.json`, `users.json`, and `state.json` should be readable only by the running user (rinnegan creates the directory mode 0700 and those files mode 0600).
 
 Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bound rinnegan`. The bundled wrapper below is the fastest way there.
 
@@ -179,7 +178,7 @@ Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bou
 Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LICENSE`). This runs Caddy as a **managed child process** listening on `0.0.0.0:8443` and reverse-proxying to `127.0.0.1:8442`, so rinnegan itself stays localhost-only. Browse to **https://\<host\>:8443**, accept the one-time self-signed warning, and log in. `cookie.secure` is forced to `true` in this mode.
 
 - **Certificate:** issued by Caddy's internal CA, so browsers warn once per client; removing the warning means installing the CA on every client (out of scope).
-- **State:** Caddy's CA and certs live in `caddy-data/` inside the bundle (via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`); delete it and restart to regenerate the CA.
+- **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/` (via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`); delete it and restart to regenerate the CA.
 - **Ports:** if you change `listen.port`, edit the bundled `Caddyfile` so its `reverse_proxy` target matches (`serve --https` warns if the port is not `8442`).
 - **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
 - **Still no rate limiting** even over HTTPS — keep it on a trusted network.

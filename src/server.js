@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadState, saveState } from './config.js';
+import { loadState, saveState, configDir } from './config.js';
 import { parseCookies, verifySession, signSession, serializeCookie } from './auth.js';
 import { verifyLogin } from './users.js';
 import { createPtySession } from './pty.js';
@@ -18,7 +18,7 @@ function startCaddy(root, flags) {
   const caddyfile = flags['caddyfile'] ? path.resolve(flags['caddyfile'])
     : root ? path.join(root, 'Caddyfile') : null;
   const dataDir = flags['caddy-data'] ? path.resolve(flags['caddy-data'])
-    : root ? path.join(root, 'caddy-data') : null;
+    : path.join(configDir(), 'caddy-data');
   if (!caddyBin || !existsSync(caddyBin)) {
     throw new Error(
       `--https requires the bundled Caddy binary; not found at ${caddyBin ?? '<unknown>'}. ` +
@@ -28,7 +28,6 @@ function startCaddy(root, flags) {
   if (!caddyfile || !existsSync(caddyfile)) {
     throw new Error(`--https requires a Caddyfile; not found at ${caddyfile ?? '<unknown>'}.`);
   }
-  if (!dataDir) throw new Error('--https: could not determine a Caddy data directory; pass --caddy-data <path>.');
   return spawn(caddyBin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], {
     stdio: 'inherit',
     env: { ...process.env, XDG_DATA_HOME: dataDir, XDG_CONFIG_HOME: dataDir },

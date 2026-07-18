@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 const DEFAULTS = {
   listen: { host: '127.0.0.1', port: 8442 },
@@ -41,19 +42,27 @@ function check(cond, msg) {
   if (!cond) throw new Error('invalid config: ' + msg);
 }
 
-export function loadConfig(configPath) {
-  const abs = path.resolve(configPath);
+export function configDir() {
+  return path.join(os.homedir(), '.config', 'rinnegan');
+}
+
+export function loadConfig() {
+  const dir = configDir();
+  const configFile = path.join(dir, 'config.json');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   let raw;
   try {
-    raw = readFileSync(abs, 'utf8');
+    raw = readFileSync(configFile, 'utf8');
   } catch (e) {
-    throw new Error(`cannot read config file ${abs}: ${e.message}`);
+    if (e.code !== 'ENOENT') throw new Error(`cannot read config file ${configFile}: ${e.message}`);
+    raw = JSON.stringify(DEFAULTS, null, 2) + '\n';
+    writeFileSync(configFile, raw, { mode: 0o600 });
   }
   let user;
   try {
     user = JSON.parse(raw);
   } catch (e) {
-    throw new Error(`invalid JSON in config file ${abs}: ${e.message}`);
+    throw new Error(`invalid JSON in config file ${configFile}: ${e.message}`);
   }
   check(isPlainObject(user), 'config must be a JSON object');
 
@@ -102,10 +111,8 @@ export function loadConfig(configPath) {
 
   if (cfg.terminal.cwd == null) cfg.terminal.cwd = process.env.HOME || process.cwd();
 
-  // Relative users/state paths resolve against the config file's directory.
-  const configDir = path.dirname(abs);
-  cfg.usersFile = path.resolve(configDir, cfg.usersFile);
-  cfg.stateFile = path.resolve(configDir, cfg.stateFile);
+  cfg.usersFile = path.resolve(dir, cfg.usersFile);
+  cfg.stateFile = path.resolve(dir, cfg.stateFile);
 
   return cfg;
 }

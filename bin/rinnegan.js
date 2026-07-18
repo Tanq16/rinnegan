@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { addUser, setPassword, listUsers } from '../src/users.js';
 import { start } from '../src/server.js';
 
 const USAGE = `usage:
-  rinnegan serve [--https] --config <path>
+  rinnegan serve [--https]
   (--https serves via the bundled Caddy with a self-signed cert on :8443)
-  rinnegan user add --config <path> --username <name> [--role admin|user]
-  rinnegan user passwd --config <path> --username <name>
-  rinnegan user list --config <path>
+  rinnegan user add --username <name> [--role admin|user]
+  rinnegan user passwd --username <name>
+  rinnegan user list
 `;
 
 const BOOLEAN_FLAGS = new Set(['https']);
@@ -101,8 +100,8 @@ async function promptNewPassword() {
   return password;
 }
 
-async function userAdd(configPath, flags) {
-  const cfg = loadConfig(configPath);
+async function userAdd(flags) {
+  const cfg = loadConfig();
   const username = requireFlag(flags, 'username');
   const role = flags.role ?? 'user';
   if (role !== 'admin' && role !== 'user') throw new Error("--role must be 'admin' or 'user'");
@@ -110,15 +109,15 @@ async function userAdd(configPath, flags) {
   await addUser(cfg.usersFile, username, role, password);
 }
 
-async function userPasswd(configPath, flags) {
-  const cfg = loadConfig(configPath);
+async function userPasswd(flags) {
+  const cfg = loadConfig();
   const username = requireFlag(flags, 'username');
   const password = await promptNewPassword();
   await setPassword(cfg.usersFile, username, password);
 }
 
-function userList(configPath) {
-  const cfg = loadConfig(configPath);
+function userList() {
+  const cfg = loadConfig();
   for (const user of listUsers(cfg.usersFile)) {
     process.stdout.write(`${user.username}\t${user.role}\n`);
   }
@@ -126,19 +125,17 @@ function userList(configPath) {
 
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
-  if (!flags.config) usageExit();
-  const configPath = path.resolve(flags.config);
   const command = positional.length === 0 ? 'serve' : positional.join(' ');
 
   switch (command) {
     case 'serve':
-      return start(loadConfig(configPath), flags);
+      return start(loadConfig(), flags);
     case 'user add':
-      return userAdd(configPath, flags);
+      return userAdd(flags);
     case 'user passwd':
-      return userPasswd(configPath, flags);
+      return userPasswd(flags);
     case 'user list':
-      return userList(configPath);
+      return userList();
     default:
       usageExit();
   }

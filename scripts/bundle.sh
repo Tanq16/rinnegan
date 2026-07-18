@@ -31,13 +31,12 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile LICENSE README.md scripts/seed.mjs; do
+for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile LICENSE README.md; do
   [ -e "$REPO_ROOT/$req" ] || die "missing required repo path: $req"
 done
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not found"
 command -v tar  >/dev/null 2>&1 || die "tar is required but not found"
-command -v node >/dev/null 2>&1 || die "node is required on PATH to run the seed script"
 
 BUNDLE_NAME="rinnegan-${OS}-${ARCH}"
 DIST_DIR="$REPO_ROOT/dist"
@@ -124,9 +123,6 @@ cp "$REPO_ROOT/launcher/Caddyfile" "$BUNDLE_ROOT/Caddyfile"
 mkdir -p "$BUNDLE_ROOT/licenses"
 cp "$CADDY_EXTRACT_DIR/LICENSE" "$BUNDLE_ROOT/licenses/caddy-LICENSE"
 cp "$NODE_EXTRACT_DIR/$NODE_PKG/LICENSE" "$BUNDLE_ROOT/licenses/node-LICENSE"
-
-echo "==> Seeding config.json + users.json"
-node "$REPO_ROOT/scripts/seed.mjs" "$BUNDLE_ROOT"
 
 TARBALL="$DIST_DIR/${BUNDLE_NAME}.tar.gz"
 echo "==> Creating tarball $TARBALL"

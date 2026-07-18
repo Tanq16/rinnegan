@@ -168,10 +168,11 @@ class WSClient {
   terminate() { try { this.ws.terminate(); } catch { /* already dead */ } }
 }
 
-function startServer(configPath) {
-  const child = spawn(process.execPath, [BIN, 'serve', '--config', configPath], {
+function startServer(homeDir) {
+  const child = spawn(process.execPath, [BIN, 'serve'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, HOME: homeDir },
   });
   let stdout = '';
   let stderr = '';
@@ -227,24 +228,25 @@ async function main() {
   const track = (c) => { clients.push(c); return c; };
 
   try {
-    await fs.promises.writeFile(path.join(tmp, 'users.json'), JSON.stringify({
+    const cfgDir = path.join(tmp, '.config', 'rinnegan');
+    await fs.promises.mkdir(cfgDir, { recursive: true });
+
+    await fs.promises.writeFile(path.join(cfgDir, 'users.json'), JSON.stringify({
       users: [
         { username: 'tanish', role: 'admin', password: await hashPassword(ADMIN_PASS) },
         { username: 'engineer-a', role: 'user', password: await hashPassword(USER_PASS) },
       ],
     }, null, 2) + '\n', { mode: 0o600 });
 
-    await fs.promises.writeFile(path.join(tmp, 'config.json'), JSON.stringify({
+    await fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
       listen: { host: '127.0.0.1', port: PORT },
       cookie: { secure: false, name: 'rinnegan', ttlSeconds: 3600 },
       terminal: { shell: '/usr/bin/env sh -l', cwd: tmp, cols: 120, rows: 36, autoRestartShell: false },
       control: { mode: 'soft', staleControllerSeconds: 5, requestTimeoutSeconds: 30 },
       buffer: { maxBytes: 65536 },
-      usersFile: './users.json',
-      stateFile: './state.json',
     }, null, 2) + '\n');
 
-    server = startServer(path.join(tmp, 'config.json'));
+    server = startServer(tmp);
     const { port } = await server.ready;
     const base = `http://127.0.0.1:${port}`;
     const wsUrl = `ws://127.0.0.1:${port}/ws`;
