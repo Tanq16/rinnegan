@@ -3,6 +3,7 @@
   --crust: #11111b;
   --mantle: #181825;
   --surface0: #313244;
+  --surface1: #45475a;
   --lavender: #b4befe;
   --overlay0: #6c7086;
   --text: #cdd6f4;
@@ -149,6 +150,18 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   color: var(--overlay2);
 }
 
+#download-path {
+  flex: 1;
+  min-width: 0;
+  background: var(--crust);
+  border: 1px solid var(--overlay0);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text);
+  font: 400 12px 'JetBrains Mono', monospace;
+}
+#download-path:focus { outline: none; border-color: var(--lavender); }
+
 #logout-form {
   margin: 14px 0 0;
   border-top: 1px solid var(--surface0);
@@ -203,7 +216,7 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   font-size: 13px;
   color: var(--yellow);
 }
-.chooser-buttons { display: flex; gap: 10px; justify-content: center; }
+.chooser-buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 .chooser-buttons button { padding: 10px 18px; }
 #chooser-info {
   margin: 14px 0 0;
@@ -233,6 +246,28 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 #upload-modal h1 { margin: 0 0 12px; font-size: 18px; color: var(--mauve); }
 .upload-hint { margin: 0 0 16px; font-size: 12px; line-height: 1.5; color: var(--overlay2); }
 #upload-modal .upload-cancel { margin-top: 16px; }
+.upload-error { margin: 12px 0 0; font-size: 12px; color: var(--red); }
+.upload-bar {
+  height: 6px;
+  background: var(--surface1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#upload-bar-fill { height: 100%; width: 0; background: var(--mauve); }
+#upload-stats { margin: 10px 0 16px; }
+/* user-select: all — one click grabs the whole path when navigator.clipboard is absent (plain HTTP) */
+.upload-path {
+  display: block;
+  background: var(--crust);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text);
+  user-select: all;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+#upload-result-path { margin-bottom: 16px; }
 #panel code, .upload-hint code {
   background: var(--crust);
   padding: 1px 5px;
@@ -246,6 +281,46 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   padding: 0 4px;
   font-size: 11px;
 }
+
+/* transfer indicator/notice: never coexist, so they share one slot stacked above #toast */
+#transfer-indicator {
+  position: fixed;
+  right: 16px;
+  bottom: 60px;
+  z-index: 49;
+  background: var(--crust);
+  border-color: var(--mauve);
+  color: var(--mauve);
+  font-size: 12px;
+}
+#transfer-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 60px;
+  z-index: 49;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  background: var(--surface0);
+  border-left: 3px solid var(--green);
+  border-radius: 6px;
+  padding: 10px 14px;
+  max-width: 60vw;
+}
+#transfer-notice.err { border-left-color: var(--red); }
+#transfer-notice-text { overflow-wrap: anywhere; }
+#transfer-notice-path { flex-basis: 100%; }
+#transfer-notice-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: var(--overlay2);
+  font-size: 16px;
+  line-height: 1;
+}
+#transfer-notice-close:hover { color: var(--text); }
 
 #toast {
   position: fixed;

@@ -31,8 +31,6 @@
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
   const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
   const RESIZE_MS = 200;
-  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // mirrors the server cap
-  const UPLOAD_CHUNK = 512 * 1024; // raw bytes/chunk; base64 stays under the WS 1MB maxPayload
   const KEY_SEQS = { 'esc': '\x1b', 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a' };
   // US-layout [unshifted, shifted] chars per ev.code, for Alt-as-Escape (M-= etc.)
   const ALT_BASE = {
@@ -61,8 +59,19 @@
     chooser: $('chooser'), chooserNote: $('chooser-note'), chooserInfo: $('chooser-info'),
     chooseShared: $('choose-shared'), chooseSplit: $('choose-split'),
     uploadOpen: $('upload-open'), uploadModal: $('upload-modal'),
+    uploadChooser: $('upload-chooser'),
     uploadClipboard: $('upload-clipboard'), uploadPick: $('upload-pick'),
-    uploadCancel: $('upload-cancel'), uploadFile: $('upload-file'),
+    uploadPickFolder: $('upload-pick-folder'), uploadCancel: $('upload-cancel'),
+    uploadError: $('upload-error'), uploadFile: $('upload-file'), uploadFolder: $('upload-folder'),
+    uploadProgress: $('upload-progress'), uploadFileLabel: $('upload-file-label'),
+    uploadBarFill: $('upload-bar-fill'), uploadStats: $('upload-stats'),
+    uploadAbort: $('upload-abort'), uploadHide: $('upload-hide'),
+    uploadResult: $('upload-result'), uploadResultMsg: $('upload-result-msg'),
+    uploadResultPath: $('upload-result-path'), uploadDone: $('upload-done'),
+    transferIndicator: $('transfer-indicator'), transferNotice: $('transfer-notice'),
+    transferNoticeText: $('transfer-notice-text'), transferNoticePath: $('transfer-notice-path'),
+    transferNoticeClose: $('transfer-notice-close'),
+    downloadPath: $('download-path'), downloadBtn: $('download-btn'),
     toast: $('toast'),
   };
 
@@ -84,9 +93,7 @@
   let replayLeft = 0; // bytes of buffer replay still expected after a mode frame
   let replayGen = 0; // invalidates stale write-callbacks from a superseded replay
   let clipboardArmed = false; // OSC 52 honored only for live output, not replay
-  let uploadSeq = 0;
-  let uploading = false; // one upload at a time (server enforces too)
-  let uploadTimer = null; // resets `uploading` if the server never answers
+  let transfer = null; // at most one upload in flight; null when idle
 
   const isAdmin = () => me.role === 'admin';
   const isController = () => me.username !== null && state.controller === me.username;
@@ -184,35 +191,9 @@
         els.endedBar.hidden = false;
         els.endedRestart.hidden = !isAdmin();
         break;
-      case 'uploaded':
-        onUploaded(msg.path);
-        break;
-      case 'upload-error':
-        uploading = false;
-        clearTimeout(uploadTimer);
-        toast('upload failed: ' + msg.msg);
-        break;
       case 'error':
         toast(msg.msg);
         break;
-    }
-  }
-
-  // Insert the uploaded path with a trailing space and NO Enter so the user can add a prompt; if there's nowhere to type, copy it instead.
-  function onUploaded(p) {
-    uploading = false;
-    clearTimeout(uploadTimer);
-    const canType = sess === 'split' || (sess === 'shared' && isController());
-    if (canType) {
-      sendInput(p + ' ');
-      if (term) term.focus();
-      toast('uploaded — inserted ' + p);
-    } else {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(p).catch(() => {});
-      }
-      const why = sess === 'lobby' ? '' : ' (take control to insert)';
-      toast('uploaded to ' + p + ' — copied' + why);
     }
   }
 
@@ -481,8 +462,37 @@
     els.chooser.hidden = true;
   }
 
+  function fmtBytes(n) {
+    const units = ['KB', 'MB', 'GB'];
+    if (n < 1024) return n + ' B';
+    let v = n / 1024;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return v.toFixed(1) + ' ' + units[i];
+  }
+
+  function showUploadState(which) {
+    els.uploadChooser.hidden = which !== 'chooser';
+    els.uploadProgress.hidden = which !== 'progress';
+    els.uploadResult.hidden = which !== 'result';
+  }
+
+  function chooserError(msg) {
+    els.uploadError.textContent = msg;
+    els.uploadError.hidden = !msg;
+  }
+
   function openUploadModal() {
     els.uploadModal.hidden = false;
+    if (transfer) {
+      transfer.hidden = false;
+      els.transferIndicator.hidden = true;
+      showUploadState('progress');
+      els.uploadHide.focus();
+      return;
+    }
+    chooserError('');
+    showUploadState('chooser');
     els.uploadPick.focus();
   }
 
@@ -490,60 +500,198 @@
     els.uploadModal.hidden = true;
   }
 
-  // btoa over a large typed array blows the argument limit, so encode in fixed windows (each byte 0..255, Latin-1 is exact).
-  function bytesToB64(bytes) {
-    let bin = '';
-    const N = 0x8000;
-    for (let i = 0; i < bytes.length; i += N) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + N));
-    }
-    return btoa(bin);
+  function hideTransfer() {
+    transfer.hidden = true;
+    els.uploadModal.hidden = true;
+    els.transferIndicator.hidden = false;
   }
 
-  async function uploadBlob(blob, filename) {
-    if (uploading) return toast('an upload is already in progress');
-    if (!blob || blob.size === 0) return toast('nothing to upload');
-    if (blob.size > MAX_UPLOAD_BYTES) return toast('file too large (max 25 MB)');
-    if (!ws || ws.readyState !== WebSocket.OPEN) return toast('not connected');
-    uploading = true;
-    const id = 'u' + (++uploadSeq);
-    try {
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      send({ t: 'upload-begin', id, name: filename, size: bytes.length });
-      for (let off = 0; off < bytes.length; off += UPLOAD_CHUNK) {
-        send({ t: 'upload-chunk', id, data: bytesToB64(bytes.subarray(off, off + UPLOAD_CHUNK)) });
-      }
-      send({ t: 'upload-end', id });
-      toast('uploading ' + filename + '…');
-      clearTimeout(uploadTimer);
-      uploadTimer = setTimeout(() => {
-        if (uploading) { uploading = false; toast('upload timed out'); }
-      }, 30000);
-    } catch (e) {
-      uploading = false;
-      toast('upload failed: ' + (e && e.message || e));
+  // Escape and backdrop-click are reflexive gestures: in progress they Hide, never abort.
+  function dismissUploadModal() {
+    if (transfer && !els.uploadProgress.hidden) return hideTransfer();
+    closeUploadModal();
+  }
+
+  function showNotice(text, p, isErr) {
+    els.transferNoticeText.textContent = text;
+    els.transferNoticePath.textContent = p;
+    els.transferNoticePath.hidden = !p;
+    els.transferNotice.classList.toggle('err', isErr);
+    els.transferNotice.hidden = false;
+  }
+
+  function hideNotice() {
+    els.transferNotice.hidden = true;
+  }
+
+  function renderProgress(sent) {
+    if (!transfer) return;
+    const pct = transfer.total > 0 ? Math.floor((sent / transfer.total) * 100) : 100;
+    els.uploadFileLabel.textContent = transfer.label;
+    els.uploadBarFill.style.width = pct + '%';
+    els.uploadStats.textContent = fmtBytes(sent) + ' / ' + fmtBytes(transfer.total) + ' · ' + pct + '%';
+    els.transferIndicator.textContent = 'uploading ' + pct + '%';
+  }
+
+  function beginTransfer(label, total) {
+    hideNotice();
+    transfer = { label, total, done: 0, xhr: null, hidden: false, cancelled: false };
+    els.uploadModal.hidden = false;
+    showUploadState('progress');
+    renderProgress(0);
+    els.uploadHide.focus();
+  }
+
+  function finishTransfer(r) {
+    const wasHidden = transfer.hidden;
+    transfer = null;
+    els.transferIndicator.hidden = true;
+    if (wasHidden) {
+      showNotice(r.notice, r.path, !r.ok);
+      return;
     }
+    els.uploadResultMsg.textContent = r.msg;
+    els.uploadResultPath.textContent = r.path;
+    els.uploadResultPath.hidden = !r.path;
+    els.uploadDone.textContent = r.ok ? 'Done' : 'Close';
+    showUploadState('result');
+    els.uploadDone.focus();
+  }
+
+  async function completeTransfer(p) {
+    let copied = false;
+    // navigator.clipboard is undefined on plain HTTP (the default deployment): claim "copied" only if it resolved.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      copied = await navigator.clipboard.writeText(p).then(() => true, () => false);
+    }
+    finishTransfer({
+      ok: true,
+      path: p,
+      msg: copied ? 'Uploaded — path copied to clipboard.' : 'Uploaded — select the path below and copy it.',
+      notice: copied ? 'uploaded — copied:' : 'uploaded:',
+    });
+  }
+
+  function failTransfer(e) {
+    if (transfer.cancelled) {
+      return finishTransfer({ ok: false, path: '', msg: 'Upload cancelled.', notice: 'upload cancelled' });
+    }
+    const m = e && e.message || String(e);
+    finishTransfer({ ok: false, path: '', msg: 'Upload failed: ' + m, notice: 'upload failed: ' + m });
+  }
+
+  // xhr, not fetch: only XHR reports upload progress, and xhr.send(file) streams from disk with no JS-side buffer.
+  function xhrUpload(url, blob, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      transfer.xhr = xhr;
+      xhr.open('POST', url);
+      xhr.upload.onprogress = (e) => onProgress(e.loaded);
+      xhr.onload = () => {
+        if (xhr.status !== 200) return reject(new Error(xhr.responseText || 'error (' + xhr.status + ')'));
+        try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error('bad server response')); }
+      };
+      xhr.onerror = () => reject(new Error('network error'));
+      xhr.onabort = () => reject(new Error('aborted'));
+      xhr.send(blob);
+    });
+  }
+
+  async function startFileUpload(blob, name) {
+    if (transfer) return;
+    beginTransfer(name, blob.size);
+    let r;
+    try {
+      r = await xhrUpload('/upload?name=' + encodeURIComponent(name), blob, renderProgress);
+    } catch (e) {
+      return failTransfer(e);
+    }
+    await completeTransfer(r.path);
+  }
+
+  async function startFolderUpload(files) {
+    if (transfer) return;
+    const top = files[0].webkitRelativePath.split('/')[0] || 'folder';
+    let total = 0;
+    for (const f of files) total += f.size;
+    beginTransfer(top + ' — file 1/' + files.length, total);
+    const t = transfer;
+    let root;
+    try {
+      const res = await fetch('/upload/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: top }),
+      });
+      if (!res.ok) throw new Error(await res.text() || 'error (' + res.status + ')');
+      const batch = await res.json();
+      for (let i = 0; i < files.length; i++) {
+        if (t.cancelled) throw new Error('aborted');
+        const f = files[i];
+        const rel = f.webkitRelativePath.split('/').slice(1).join('/') || f.name;
+        t.label = top + ' — file ' + (i + 1) + '/' + files.length;
+        renderProgress(t.done);
+        try {
+          await xhrUpload('/upload?batch=' + encodeURIComponent(batch.batchId) + '&path=' + encodeURIComponent(rel),
+            f, (loaded) => renderProgress(t.done + loaded));
+        } catch (e) {
+          if (t.cancelled) throw e;
+          throw new Error(rel + ': ' + (e && e.message || e));
+        }
+        t.done += f.size;
+        renderProgress(t.done);
+      }
+      root = batch.root;
+    } catch (e) {
+      return failTransfer(e);
+    }
+    await completeTransfer(root);
   }
 
   async function uploadFromClipboard() {
     if (!navigator.clipboard || !navigator.clipboard.read) {
-      return toast('clipboard read needs HTTPS — use Choose file…');
+      return chooserError('clipboard read needs HTTPS — use Choose file…');
     }
     let items;
     try {
       items = await navigator.clipboard.read();
     } catch (e) {
-      return toast('clipboard blocked: ' + (e && e.message || e));
+      return chooserError('clipboard blocked: ' + (e && e.message || e));
     }
     for (const item of items) {
       const type = item.types.find((t) => t.startsWith('image/'));
       if (type) {
         const blob = await item.getType(type);
         const ext = (type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
-        return uploadBlob(blob, 'clipboard-image.' + ext);
+        return startFileUpload(blob, 'clipboard-image.' + ext);
       }
     }
-    toast('no image found in the clipboard');
+    chooserError('no image found in the clipboard');
+  }
+
+  async function startDownload() {
+    const p = els.downloadPath.value.trim();
+    if (!p) return els.downloadPath.focus();
+    const url = '/download?path=' + encodeURIComponent(p);
+    let res;
+    // Probe first: <a download> reports a 404 only as a bare "Failed — No file", and location.href would navigate the terminal away.
+    try {
+      res = await fetch(url, { method: 'HEAD' });
+    } catch (e) {
+      return toast('download failed: ' + (e && e.message || e));
+    }
+    if (!res.ok) {
+      if (res.status === 404) return toast('no such path: ' + p);
+      if (res.status === 400) return toast('use an absolute path');
+      if (res.status === 401) return toast('session expired — reload the page');
+      return toast('download failed (' + res.status + ')');
+    }
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   function init() {
@@ -603,16 +751,35 @@
 
     els.uploadOpen.addEventListener('click', openUploadModal);
     els.uploadCancel.addEventListener('click', closeUploadModal);
-    els.uploadModal.addEventListener('click', (e) => { if (e.target === els.uploadModal) closeUploadModal(); });
-    els.uploadModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUploadModal(); });
-    // read the clipboard within the click's gesture, then close the modal
-    els.uploadClipboard.addEventListener('click', () => { uploadFromClipboard(); closeUploadModal(); });
+    els.uploadModal.addEventListener('click', (e) => { if (e.target === els.uploadModal) dismissUploadModal(); });
+    els.uploadModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') dismissUploadModal(); });
+    // un-awaited and the modal stays open: navigator.clipboard.read() must run inside the click's user-activation window
+    els.uploadClipboard.addEventListener('click', () => { uploadFromClipboard(); });
     els.uploadPick.addEventListener('click', () => els.uploadFile.click());
+    els.uploadPickFolder.addEventListener('click', () => els.uploadFolder.click());
     els.uploadFile.addEventListener('change', () => {
       const f = els.uploadFile.files && els.uploadFile.files[0];
       els.uploadFile.value = ''; // allow re-picking the same file
-      if (f) { closeUploadModal(); uploadBlob(f, f.name); }
+      if (f) startFileUpload(f, f.name);
     });
+    els.uploadFolder.addEventListener('change', () => {
+      const files = Array.from(els.uploadFolder.files || []);
+      els.uploadFolder.value = '';
+      if (!files.length) return chooserError('folder is empty (or unreadable)');
+      startFolderUpload(files);
+    });
+    els.uploadAbort.addEventListener('click', () => {
+      if (!transfer) return;
+      transfer.cancelled = true;
+      if (transfer.xhr) transfer.xhr.abort();
+    });
+    els.uploadHide.addEventListener('click', hideTransfer);
+    els.uploadDone.addEventListener('click', closeUploadModal);
+    els.transferIndicator.addEventListener('click', openUploadModal);
+    els.transferNoticeClose.addEventListener('click', hideNotice);
+
+    els.downloadBtn.addEventListener('click', startDownload);
+    els.downloadPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') startDownload(); });
 
     els.reconnectBtn.addEventListener('click', () => {
       hideOverlay();

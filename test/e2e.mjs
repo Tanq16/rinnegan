@@ -223,7 +223,7 @@ async function main() {
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-e2e-'));
   let server = null;
   const clients = [];
-  const uploadedPaths = []; // /tmp files created by upload checks; unlinked in finally
+  const uploadedPaths = []; // /tmp files, batch roots and dirs created by transfer checks; removed in finally
   const track = (c) => { clients.push(c); return c; };
 
   try {
@@ -691,102 +691,137 @@ async function main() {
       }
     });
 
-    const b64 = (buf) => Buffer.from(buf).toString('base64');
+    const uploadBody = Buffer.from('E2E_UPLOAD_BODY_' + rand + '\n');
+    let uploadedFile;
 
-    await check('upload from the lobby lands in /tmp with a 5-char random prefix', async () => {
-      const up = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await up.nextText(5000, 'upload socket hello'), 'tanish', 'admin');
-      // never attaches to a session — proves any connection can upload
-      const body = Buffer.from('E2E_UPLOAD_BODY_' + rand + '\n');
-      up.send({ t: 'upload-begin', id: 'up1', name: 'e2e-upload.txt', size: body.length });
-      up.send({ t: 'upload-chunk', id: 'up1', data: b64(body) });
-      up.send({ t: 'upload-end', id: 'up1' });
-      const done = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up1', 5000, 'uploaded reply');
-      uploadedPaths.push(done.path);
-      assert.match(done.path, /^\/tmp\/[a-z0-9]{5}-e2e-upload\.txt$/, `unexpected path ${done.path}`);
-      assert.equal(fs.readFileSync(done.path, 'utf8'), body.toString(), 'uploaded bytes differ from source');
-      up.ws.close();
-      await up.waitClose(5000, 'upload socket close');
+    await check('POST /upload streams a file to /tmp with a 5-char random prefix', async () => {
+      const res = await fetch(base + '/upload?name=e2e-upload.txt', {
+        method: 'POST',
+        headers: { cookie: cookieAdmin },
+        body: uploadBody,
+      });
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      uploadedPaths.push(json.path);
+      uploadedFile = json.path;
+      assert.match(json.path, /^\/tmp\/[a-z0-9]{5}-e2e-upload\.txt$/, `unexpected path ${json.path}`);
+      assert.equal(fs.readFileSync(json.path, 'utf8'), uploadBody.toString(), 'uploaded bytes differ from source');
+      assert.equal(fs.statSync(json.path).mode & 0o777, 0o600, 'uploaded file must be mode 0600');
     });
 
-    await check('upload reassembles multiple chunks and sanitizes a hostile filename', async () => {
-      const up = track(new WSClient(wsUrl, cookieUser));
-      assertHelloShape(await up.nextText(5000, 'upload sanitize hello'), 'engineer-a', 'user');
+    await check('upload sanitizes a hostile filename', async () => {
       const nasty = '../../etc/e2e nasty;$(rm -rf).txt'; // traversal + spaces + shell metachars
-      const body = Buffer.from('SANITIZE_BODY_' + rand + '_' + 'x'.repeat(50));
-      const half = Math.ceil(body.length / 2);
-      up.send({ t: 'upload-begin', id: 'up2', name: nasty, size: body.length });
-      up.send({ t: 'upload-chunk', id: 'up2', data: b64(body.subarray(0, half)) });
-      up.send({ t: 'upload-chunk', id: 'up2', data: b64(body.subarray(half)) });
-      up.send({ t: 'upload-end', id: 'up2' });
-      const a = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up2', 5000, 'sanitized uploaded');
+      const body = Buffer.from('SANITIZE_BODY_' + rand);
+      const send = () => fetch(base + '/upload?name=' + encodeURIComponent(nasty), {
+        method: 'POST',
+        headers: { cookie: cookieUser },
+        body,
+      });
+      const a = await (await send()).json();
       uploadedPaths.push(a.path);
       assert.match(a.path, /^\/tmp\/[a-z0-9]{5}-[A-Za-z0-9._-]+\.txt$/, `unsanitized path ${a.path}`);
       assert.ok(!a.path.includes('..'), 'traversal survived sanitization');
-      assert.ok(!a.path.slice(5).includes('/'), 'path escaped /tmp');
+      assert.ok(!a.path.slice('/tmp/'.length).includes('/'), 'path escaped /tmp');
       assert.ok(!/[;$()\s]/.test(a.path), 'shell metacharacters survived sanitization');
-      assert.equal(fs.readFileSync(a.path, 'utf8'), body.toString(), 'reassembled bytes differ from source');
+      assert.equal(fs.readFileSync(a.path, 'utf8'), body.toString(), 'uploaded bytes differ from source');
       // same name again → a different random prefix, a different file
-      up.send({ t: 'upload-begin', id: 'up3', name: nasty, size: body.length });
-      up.send({ t: 'upload-chunk', id: 'up3', data: b64(body) });
-      up.send({ t: 'upload-end', id: 'up3' });
-      const b = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up3', 5000, 'second uploaded');
+      const b = await (await send()).json();
       uploadedPaths.push(b.path);
       assert.notEqual(a.path, b.path, 'identical names must get distinct random prefixes');
-      up.ws.close();
-      await up.waitClose(5000, 'sanitize socket close');
     });
 
-    await check('upload over the 25 MB cap is rejected at begin', async () => {
-      const up = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await up.nextText(5000, 'upload cap hello'), 'tanish', 'admin');
-      up.send({ t: 'upload-begin', id: 'up4', name: 'huge.bin', size: 25 * 1024 * 1024 + 1 });
-      const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up4', 5000, 'oversize rejected');
-      assert.ok(typeof err.msg === 'string' && err.msg.length > 0, 'error must carry a message');
-      up.ws.close();
-      await up.waitClose(5000, 'cap socket close');
+    await check('unauthenticated transfer routes are refused', async () => {
+      const up = await fetch(base + '/upload?name=x', { method: 'POST', body: 'nope' });
+      assert.equal(up.status, 401);
+      const dl = await fetch(base + '/download?path=/etc/hostname');
+      assert.equal(dl.status, 401);
     });
 
-    await check('upload aborts when chunk bytes exceed the declared size', async () => {
-      const up = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await up.nextText(5000, 'upload overflow hello'), 'tanish', 'admin');
-      up.send({ t: 'upload-begin', id: 'up5', name: 'liar.txt', size: 4 });
-      up.send({ t: 'upload-chunk', id: 'up5', data: b64(Buffer.from('way more than four bytes')) });
-      const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up5', 5000, 'overflow aborted');
-      assert.ok(err.msg, 'overflow error must carry a message');
-      up.ws.close();
-      await up.waitClose(5000, 'overflow socket close');
+    await check('GET /download round-trips an uploaded file', async () => {
+      const head = await fetch(base + '/download?path=' + encodeURIComponent(uploadedFile), {
+        method: 'HEAD',
+        headers: { cookie: cookieUser },
+      });
+      assert.equal(head.status, 200);
+      assert.equal(head.headers.get('content-length'), String(uploadBody.length));
+      assert.ok((head.headers.get('content-disposition') || '').includes('attachment'),
+        'download must be sent as an attachment');
+      const res = await fetch(base + '/download?path=' + encodeURIComponent(uploadedFile), {
+        headers: { cookie: cookieUser },
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(Buffer.from(await res.arrayBuffer()), uploadBody, 'downloaded bytes differ from source');
     });
 
-    await check('upload-end with a byte-count mismatch is rejected', async () => {
-      const up = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await up.nextText(5000, 'upload incomplete hello'), 'tanish', 'admin');
-      const body = Buffer.from('12345678');
-      up.send({ t: 'upload-begin', id: 'up6', name: 'short.txt', size: body.length });
-      up.send({ t: 'upload-chunk', id: 'up6', data: b64(body.subarray(0, 3)) });
-      up.send({ t: 'upload-end', id: 'up6' });
-      const err = await up.waitText((m) => m.t === 'upload-error' && m.id === 'up6', 5000, 'incomplete rejected');
-      assert.ok(err.msg, 'incomplete error must carry a message');
-      up.ws.close();
-      await up.waitClose(5000, 'incomplete socket close');
+    await check('download probe rejects bad paths', async () => {
+      const missing = await fetch(base + '/download?path=/tmp/e2e-missing-' + rand, {
+        method: 'HEAD',
+        headers: { cookie: cookieAdmin },
+      });
+      assert.equal(missing.status, 404);
+      const rel = await fetch(base + '/download?path=relative', { headers: { cookie: cookieAdmin } });
+      assert.equal(rel.status, 400);
     });
 
-    await check('a chunk with no matching upload is ignored', async () => {
-      const up = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await up.nextText(5000, 'stray chunk hello'), 'tanish', 'admin');
-      up.send({ t: 'upload-chunk', id: 'nope', data: b64(Buffer.from('orphan')) });
-      up.send({ t: 'upload-end', id: 'nope' });
-      // a valid upload right after must still succeed, and 'nope' must never resolve
-      const body = Buffer.from('AFTER_STRAY_' + rand);
-      up.send({ t: 'upload-begin', id: 'up7', name: 'ok.txt', size: body.length });
-      up.send({ t: 'upload-chunk', id: 'up7', data: b64(body) });
-      up.send({ t: 'upload-end', id: 'up7' });
-      const done = await up.waitText((m) => m.t === 'uploaded' && m.id === 'up7', 5000, 'valid upload after stray');
-      uploadedPaths.push(done.path);
-      assert.ok(!up.texts.some((m) => (m.t === 'uploaded' || m.t === 'upload-error') && m.id === 'nope'),
-        'stray chunk/end produced a reply');
-      up.ws.close();
-      await up.waitClose(5000, 'stray socket close');
+    await check('directory download arrives as tar.gz', async () => {
+      const dir = '/tmp/e2e-dl-' + rand;
+      fs.mkdirSync(dir, { recursive: true });
+      uploadedPaths.push(dir);
+      fs.writeFileSync(path.join(dir, 'inside.txt'), 'DIR_BODY_' + rand + '\n');
+      const res = await fetch(base + '/download?path=' + encodeURIComponent(dir), {
+        headers: { cookie: cookieAdmin },
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'application/gzip');
+      assert.ok((res.headers.get('content-disposition') || '').endsWith('.tar.gz"'),
+        `unexpected content-disposition ${res.headers.get('content-disposition')}`);
+      const body = Buffer.from(await res.arrayBuffer());
+      assert.equal(body[0], 0x1f, 'body is not gzip');
+      assert.equal(body[1], 0x8b, 'body is not gzip');
+    });
+
+    await check('batch upload lands nested paths under one root and rejects traversal', async () => {
+      const created = await fetch(base + '/upload/batch', {
+        method: 'POST',
+        headers: { cookie: cookieAdmin, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'e2e-dir' }),
+      });
+      assert.equal(created.status, 200);
+      const { batchId, root } = await created.json();
+      uploadedPaths.push(root);
+      assert.match(root, /^\/tmp\/[a-z0-9]{5}-e2e-dir$/, `unexpected root ${root}`);
+      const body = Buffer.from('BATCH_BODY_' + rand + '\n');
+      const one = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+        '&path=' + encodeURIComponent('sub/one.txt'), {
+        method: 'POST',
+        headers: { cookie: cookieAdmin },
+        body,
+      });
+      assert.equal(one.status, 200);
+      assert.equal((await one.json()).path, root + '/sub/one.txt');
+      assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'batch bytes differ from source');
+      // a colliding sibling must fail-closed (409), never silently clobber the first file
+      const collide = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+        '&path=' + encodeURIComponent('sub/one.txt'), {
+        method: 'POST',
+        headers: { cookie: cookieAdmin },
+        body: 'CLOBBER',
+      });
+      assert.equal(collide.status, 409, 'a name collision must be refused, not overwrite');
+      assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'the original file must survive a collision');
+      const evil = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+        '&path=' + encodeURIComponent('../evil'), {
+        method: 'POST',
+        headers: { cookie: cookieAdmin },
+        body: 'pwned',
+      });
+      assert.equal(evil.status, 400, 'traversal must be rejected');
+      const unknown = await fetch(base + '/upload?batch=deadbeef0000dead&path=' + encodeURIComponent('x.txt'), {
+        method: 'POST',
+        headers: { cookie: cookieAdmin },
+        body: 'orphan',
+      });
+      assert.equal(unknown.status, 400, 'unknown batch must be rejected');
     });
 
     await check('leaving shared returns to the lobby but keeps the shared shell alive', async () => {
@@ -855,7 +890,7 @@ async function main() {
       if (err) console.error(`--- server stderr ---\n${err}`);
     }
   } finally {
-    for (const p of uploadedPaths) { try { fs.unlinkSync(p); } catch { /* already gone */ } }
+    for (const p of uploadedPaths) fs.rmSync(p, { recursive: true, force: true });
     for (const c of clients) c.terminate();
     if (server && server.child.exitCode === null) {
       server.child.kill('SIGTERM');

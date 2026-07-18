@@ -46,11 +46,16 @@
     <section id="upload-section">
       <h3>Files</h3>
       <div class="row">
-        <button id="upload-open" type="button">Upload file&hellip;</button>
+        <button id="upload-open" type="button">Upload&hellip;</button>
       </div>
-      <p class="hint">Sends a file to <code>/tmp</code> on the host and drops its path
-        into your terminal &mdash; e.g. to paste a clipboard image into a CLI like
-        Claude Code, where <kbd>Ctrl-V</kbd> can't reach across the browser.</p>
+      <div class="row">
+        <input id="download-path" type="text" placeholder="/absolute/path on host" spellcheck="false" autocomplete="off">
+        <button id="download-btn" type="button">Download</button>
+      </div>
+      <p class="hint">Upload lands in <code>/tmp</code> on the host and shows the path to paste
+        &mdash; e.g. to hand a clipboard image to a CLI like Claude Code, where <kbd>Ctrl-V</kbd>
+        can't reach across the browser. Download streams any host path; directories arrive
+        as <code>.tar.gz</code>.</p>
     </section>
 
     <section>
@@ -107,16 +112,36 @@
 
   <div id="upload-modal" hidden>
     <div class="overlay-card">
-      <h1>Upload a file</h1>
-      <p class="upload-hint">Transferred to <code>/tmp</code> on the host with a short
-        random prefix; the path is inserted into your terminal.</p>
-      <div class="chooser-buttons">
-        <button id="upload-clipboard" type="button"
-          title="Reads an image from your clipboard (needs HTTPS)">From clipboard</button>
-        <button id="upload-pick" type="button">Choose file&hellip;</button>
+      <h1>Upload</h1>
+      <div id="upload-chooser">
+        <p class="upload-hint">Lands in <code>/tmp</code> on the host with a short random
+          prefix. Nothing is typed into your terminal &mdash; the path is shown here when
+          the upload finishes.</p>
+        <div class="chooser-buttons">
+          <button id="upload-clipboard" type="button"
+            title="Reads an image from your clipboard (needs HTTPS)">From clipboard</button>
+          <button id="upload-pick" type="button">Choose file&hellip;</button>
+          <button id="upload-pick-folder" type="button">Choose folder&hellip;</button>
+        </div>
+        <p id="upload-error" class="upload-error" hidden></p>
+        <button id="upload-cancel" type="button" class="upload-cancel">Cancel</button>
       </div>
-      <button id="upload-cancel" type="button" class="upload-cancel">Cancel</button>
+      <div id="upload-progress" hidden>
+        <p id="upload-file-label" class="upload-hint"></p>
+        <div class="upload-bar"><div id="upload-bar-fill"></div></div>
+        <p id="upload-stats" class="upload-hint"></p>
+        <div class="chooser-buttons">
+          <button id="upload-abort" type="button" class="danger">Cancel upload</button>
+          <button id="upload-hide" type="button">Hide</button>
+        </div>
+      </div>
+      <div id="upload-result" hidden>
+        <p id="upload-result-msg" class="upload-hint"></p>
+        <code id="upload-result-path" class="upload-path" hidden></code>
+        <button id="upload-done" type="button">Done</button>
+      </div>
       <input id="upload-file" type="file" hidden>
+      <input id="upload-folder" type="file" webkitdirectory hidden>
     </div>
   </div>
 
@@ -125,6 +150,13 @@
       <p id="overlay-msg"></p>
       <button id="reconnect-btn" type="button">Reconnect</button>
     </div>
+  </div>
+
+  <button id="transfer-indicator" type="button" hidden></button>
+  <div id="transfer-notice" hidden>
+    <span id="transfer-notice-text"></span>
+    <code id="transfer-notice-path" class="upload-path" hidden></code>
+    <button id="transfer-notice-close" type="button" aria-label="Dismiss">&times;</button>
   </div>
 
   <div id="toast" hidden></div>

@@ -1,0 +1,132 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { safeName, safeRelPath, resolveBatchDest } from '../src/upload.js';
+
+test('safeName', async (t) => {
+  const cases = [
+    { name: 'plain name passes through', in: 'notes.txt', want: 'notes.txt' },
+    { name: 'traversal and shell metacharacters', in: '../../etc/x;$(rm -rf).txt', want: 'x___rm_-rf_.txt' },
+    { name: 'keeps only the basename', in: '/etc/passwd', want: 'passwd' },
+    { name: 'backslash path keeps only the basename', in: 'C:\\windows\\system32\\evil.dll', want: 'evil.dll' },
+    { name: 'strips leading dots', in: '.bashrc', want: 'bashrc' },
+    { name: 'all dots collapses to the fallback', in: '...', want: 'file' },
+    { name: 'empty string', in: '', want: 'file' },
+    { name: 'null', in: null, want: 'file' },
+    { name: 'undefined', in: undefined, want: 'file' },
+    { name: 'a space-only basename survives as an underscore', in: '/// ', want: '_' },
+    { name: 'trailing slash leaves an empty basename', in: 'dir/', want: 'file' },
+    { name: 'spaces become underscores', in: 'my file.txt', want: 'my_file.txt' },
+    { name: 'newline is sanitized', in: 'a\nb.txt', want: 'a_b.txt' },
+    { name: 'non-ascii is sanitized', in: 'héllo→.txt', want: 'h_llo_.txt' },
+  ];
+  for (const c of cases) {
+    await t.test(c.name, () => {
+      assert.equal(safeName(c.in), c.want);
+    });
+  }
+});
+
+test('safeName caps the length at 100', () => {
+  const got = safeName('a'.repeat(150) + '.txt');
+  assert.equal(got.length, 100);
+  assert.equal(got, 'a'.repeat(100));
+});
+
+test('safeName never returns a traversal or a separator', async (t) => {
+  const hostile = ['../../../etc/shadow', '..\\..\\win.ini', './../x', '~/.ssh/id_rsa', 'a/b/../c'];
+  for (const input of hostile) {
+    await t.test(input, () => {
+      const got = safeName(input);
+      assert.doesNotMatch(got, /[\\/]/);
+      assert.doesNotMatch(got, /^\./);
+      assert.equal(path.basename(got), got);
+    });
+  }
+});
+
+test('safeRelPath', async (t) => {
+  const cases = [
+    { name: 'single segment', in: 'f.txt', want: 'f.txt' },
+    { name: 'nested segments', in: 'a/b/c.txt', want: 'a/b/c.txt' },
+    { name: 'empty string rejected', in: '', want: null },
+    { name: 'null rejected', in: null, want: null },
+    { name: 'undefined rejected', in: undefined, want: null },
+    { name: 'double slash rejected', in: 'a//b', want: null },
+    { name: 'absolute path rejected', in: '/abs', want: null },
+    { name: 'trailing slash rejected', in: 'a/', want: null },
+    { name: 'parent traversal rejected', in: '../x', want: null },
+    { name: 'interior traversal rejected', in: 'a/../b', want: null },
+    { name: 'dot segment rejected', in: 'a/./b', want: null },
+    { name: 'bare dot rejected', in: '.', want: null },
+    { name: 'triple dot is a legal filename', in: '...', want: '...' },
+    { name: 'interior double-dot rejected', in: 'a/../../b', want: null },
+    { name: 'leading dot preserved (hidden file)', in: '.hidden/f', want: '.hidden/f' },
+    { name: 'backslashes are separators', in: 'dir\\sub\\f', want: 'dir/sub/f' },
+    { name: 'mixed separators', in: 'dir\\sub/f', want: 'dir/sub/f' },
+    { name: 'spaces and metacharacters preserved', in: 'a b/c;d', want: 'a b/c;d' },
+    { name: 'shell metacharacters preserved verbatim', in: 'x/$(rm -rf ~)', want: 'x/$(rm -rf ~)' },
+    { name: 'unicode names preserved', in: 'photos/写真.jpg', want: 'photos/写真.jpg' },
+    { name: 'accented names preserved', in: 'café/menü.txt', want: 'café/menü.txt' },
+    { name: 'deep nesting passes', in: 'a/b/c/d/e/f/g/h.txt', want: 'a/b/c/d/e/f/g/h.txt' },
+  ];
+  for (const c of cases) {
+    await t.test(c.name, () => {
+      assert.equal(safeRelPath(c.in), c.want);
+    });
+  }
+});
+
+test('safeRelPath rejects an over-long segment instead of truncating', () => {
+  // truncation is itself a collision source: two long distinct names would slice to the same string
+  assert.equal(safeRelPath('a'.repeat(256)), null);
+  assert.equal(safeRelPath('a'.repeat(255)), 'a'.repeat(255));
+});
+
+test('safeRelPath rejects control characters', async (t) => {
+  for (const code of [0x00, 0x09, 0x0a, 0x0d, 0x1f, 0x7f]) {
+    await t.test('code 0x' + code.toString(16), () => {
+      assert.equal(safeRelPath('a/b' + String.fromCharCode(code) + 'c'), null);
+    });
+  }
+});
+
+test('safeRelPath keeps distinct names distinct (folder-upload data-loss guard)', () => {
+  assert.notEqual(safeRelPath('report v1.txt'), safeRelPath('report_v1.txt'));
+  assert.notEqual(safeRelPath('写真.jpg'), safeRelPath('文書.jpg'));
+});
+
+test('resolveBatchDest', async (t) => {
+  const root = '/tmp/ab12c-project';
+
+  await t.test('joins a clean relative path under the root', () => {
+    assert.equal(resolveBatchDest(root, 'src/index.js'), root + '/src/index.js');
+  });
+
+  await t.test('preserves the real relative path under the root', () => {
+    assert.equal(resolveBatchDest(root, 'a b/c;d'), root + '/a b/c;d');
+  });
+
+  await t.test('backslash separators resolve to nested dirs', () => {
+    assert.equal(resolveBatchDest(root, 'dir\\sub\\f'), root + '/dir/sub/f');
+  });
+
+  const rejected = ['', '../x', 'a/../b', '/etc/passwd', 'a//b', 'a/', '..'];
+  for (const rel of rejected) {
+    await t.test('rejects ' + JSON.stringify(rel), () => {
+      assert.equal(resolveBatchDest(root, rel), null);
+    });
+  }
+
+  await t.test('every accepted result stays under the root', () => {
+    const accepted = ['f', 'a/b', '.hidden/f', 'deep/a/b/c/d.txt', 'x'.repeat(150) + '/y'];
+    for (const rel of accepted) {
+      const dest = resolveBatchDest(root, rel);
+      assert.ok(dest.startsWith(root + path.sep), rel + ' escaped the root');
+    }
+  });
+
+  await t.test('a sibling root prefix does not count as containment', () => {
+    assert.equal(resolveBatchDest('/tmp/ab12c-proj', '..'), null);
+  });
+});

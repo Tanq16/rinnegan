@@ -4,10 +4,10 @@
 	auto_https disable_redirects
 	skip_install_trust
 	default_sni localhost
+	# No read_body timeout and no request_body cap: file uploads are unbounded and stream for as long as they need.
 	servers {
 		timeouts {
 			read_header 10s
-			read_body 30s
 		}
 	}
 }
@@ -16,9 +16,6 @@
 https://localhost:8443, https://:8443 {
 	bind 0.0.0.0 ::
 	tls internal
-	request_body {
-		max_size 4MB
-	}
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
