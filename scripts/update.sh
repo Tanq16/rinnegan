@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Bundled self-updater: replaces this install with the latest release for its OS/arch.
-# Only the artifact is swapped; durable state in ~/.config/rinnegan is never touched.
+# Swaps only the release artifact; durable state in ~/.config/rinnegan is never touched.
 set -euo pipefail
 
 REPO="Tanq16/rinnegan"
@@ -30,8 +29,7 @@ BUNDLE_NAME="rinnegan-${OS}-${ARCH}"
 ASSET="${BUNDLE_NAME}.tar.gz"
 URL="https://github.com/${REPO}/releases/latest/download/${ASSET}"
 
-# Resolve the script's real location, following symlinks, so the install dir is right
-# even when update.sh is invoked through a symlink from elsewhere.
+# Follow symlinks so INSTALL_DIR is the real script location, not a symlink's dir.
 SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SOURCE" ]; do
   DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"

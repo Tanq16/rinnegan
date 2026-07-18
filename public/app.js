@@ -399,7 +399,6 @@
     const split = sess === 'split';
     els.pSession.textContent = split ? 'Terminal' : sess;
     els.pSession.dataset.mode = sess;
-    // Toggle is meaningless in the lobby (chooser owns it) or when there is no shared tier to switch to.
     els.sessionBtn.hidden = sess === 'lobby' || !offerShared;
     els.sessionBtn.textContent = split ? 'Return to shared' : 'Terminal session';
     els.leaveBtn.hidden = sess === 'lobby';
