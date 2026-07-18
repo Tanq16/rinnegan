@@ -8,7 +8,7 @@
 
 ---
 
-A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output; users take or request control to type. The shell is a normal interactive shell on the host — for persistence, panes, or long-running work, start `tmux` or `zellij` inside it, in the shared session or a per-user [split session](#split-sessions).
+A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output; users take or request control to type. The shell is a normal interactive shell on the host — for persistence, panes, or long-running work, start `tmux` or `zellij` inside it, in the shared session or a per-user [terminal session](#terminal-sessions).
 
 It is **not** an IDE, a task manager, or a tmux manager — just a shared terminal frontend, like a web-based SSH client for a small trusted team collaborating in one environment. The common use case is a homelab workspace or a cloud VPS.
 
@@ -16,7 +16,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a shared termin
 
 - **Shared, server-owned PTY** — one shell process on the host, streamed live to every browser over WebSocket; no one's local state drifts.
 - **Exactly one keyboard controller** — soft (request/grant) or fast (take instantly); admins can force, release, or switch modes. See [Control](#control).
-- **Per-user split sessions** — your own fresh shell on the same host without disturbing the shared terminal, torn down on disconnect. See [Split sessions](#split-sessions).
+- **Per-user terminal sessions** — your own fresh shell on the same host without disturbing the shared terminal, torn down on disconnect. See [Terminal sessions](#terminal-sessions).
 - **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
 - **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
 - **Self-contained tarball** — each release bundles its own Node runtime and a platform-native `node-pty`; the host needs no Node, Python, compiler, or `make`.
@@ -27,7 +27,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a shared termin
 <details>
 <summary>Click to expand screenshots</summary>
 
-No screenshots yet — this section will be filled in with real captures of the shared terminal, control panel, and split-session chooser in a future update.
+No screenshots yet — this section will be filled in with real captures of the shared terminal, control panel, and terminal-session chooser in a future update.
 
 </details>
 
@@ -41,15 +41,26 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan
 ```
 
-Open **http://127.0.0.1:8442** and log in with the seeded `admin` / `changeme` account. `./bin/rinnegan` with no subcommand runs the server (same as `serve`); it binds `127.0.0.1:8442` and runs as the invoking user. Each tarball is self-contained — its own Node runtime, a platform-native `node-pty`, the `bin/caddy` binary for [HTTPS](#serving-over-https), and third-party licenses under `licenses/` — so the host needs no Node, Python, compiler, or `make`.
+`./bin/rinnegan` with no subcommand runs the server (same as `serve`); it binds `127.0.0.1:8442` and runs as the invoking user. Each tarball is self-contained — its own Node runtime, a platform-native `node-pty`, the `bin/caddy` binary for [HTTPS](#serving-over-https), and third-party licenses under `licenses/` — so the host needs no Node, Python, compiler, or `make`.
 
-**Change the default password immediately** — this is a shell on your machine:
+**First run seeds no user.** Create one before serving — this is a shell on your machine, so pick a real password (input is never echoed):
 
 ```sh
-./bin/rinnegan user passwd --username admin
+./bin/rinnegan user add --username admin --role admin
 ```
 
-It takes effect on the next login without a restart (input is never echoed).
+Then open **http://127.0.0.1:8442** and log in; new users take effect on the next login without a restart. With no user configured, `serve` refuses to start and tells you to add one (or pass `--no-auth`).
+
+**What each tier offers** — rinnegan scales what it serves to the number of accounts:
+
+| Setup | On boot | Users get |
+| ----- | ------- | --------- |
+| 0 users, auth on | refuses to start | — (add a user, or pass `--no-auth`) |
+| 1 user | no shared shell | their own terminal session only |
+| 2+ users | shared shell spawned | Shared **and** terminal sessions, plus the admin panel |
+| `serve --no-auth` | no shared shell | one terminal session as `nobody` (role admin); no login page, no Log out |
+
+`serve --no-auth` disables authentication entirely: the login page is skipped and anyone who reaches the port gets a host shell. It prints a single startup warning and is only for a trusted, isolated box. The shared session — one server-owned PTY several people watch — only makes sense with more than one account, so it appears just in the 2+ user tier.
 
 **macOS.** The launcher best-effort strips `com.apple.quarantine` from the extracted bundle so Gatekeeper doesn't block the bundled `node`. If macOS still balks, download with `curl -fLO <asset-url>` or clear it manually:
 
@@ -108,16 +119,16 @@ All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of t
 - **Admins** can take control immediately even in soft mode, force-release the controller, switch mode, restart the shell, and kick all connections (close code 4000, including their own).
 - Non-controller keyboard input is silently ignored server-side.
 
-The whole team shares one grid, sized like tmux to its smallest attached client: every browser renders at a fixed font size (use browser zoom to scale), reports the grid that fits its window, and the shared terminal sizes to the smallest viewer's grid. That viewer fills their window; for everyone else the leftover space is painted in the terminal background as padding, not a letterbox. Joining from a small window shrinks the grid for everyone — deliberate. `terminal.cols`/`rows` are only the initial grid before the first viewer attaches; split sessions size to your own viewport instead.
+The whole team shares one grid, sized like tmux to its smallest attached client: every browser renders at a fixed font size (use browser zoom to scale), reports the grid that fits its window, and the shared terminal sizes to the smallest viewer's grid. That viewer fills their window; for everyone else the leftover space is painted in the terminal background as padding, not a letterbox. Joining from a small window shrinks the grid for everyone — deliberate. `terminal.cols`/`rows` are only the initial grid before the first viewer attaches; terminal sessions size to your own viewport instead.
 
-### Split sessions
+### Terminal sessions
 
-A **split** gives you your own fresh shell on the same host while everyone else keeps the shared terminal.
+A **terminal session** gives you your own fresh shell on the same host while everyone else keeps the shared terminal.
 
-- Every connection starts in a **lobby**: after login you pick **Shared** or **Split**; nothing shows until you choose. A split shell exit returns you to the chooser (noting the exit); an auto-reconnect after a network blip silently rejoins the shared session; a fresh page load always starts at the chooser.
-- **Leave session** (Control panel) returns you to the chooser from either mode. Leaving Shared detaches only *you* — the server-owned shell keeps running for everyone else. Leaving a split ends that shell.
-- Splitting releases control immediately if you held it, and typing in your split never needs control. Keystrokes never cross sessions: input is tagged with its session, and anything in flight during a switch is dropped, not misdelivered.
-- A split lives only while you are attached — switching to Shared, closing the tab, or losing the connection kills it, with no scrollback or reattach. Durability is tmux's job: start `tmux` inside a split and it daemonizes out of the split's process tree, so reconnect → Split → `tmux attach` resumes your work.
+- Every connection starts in a **lobby**: after login you pick **Shared** or **Terminal** (a solo or `--no-auth` deployment offers only Terminal); nothing shows until you choose. A terminal-session shell exit returns you to the chooser (noting the exit); an auto-reconnect after a network blip silently rejoins the shared session; a fresh page load always starts at the chooser.
+- **Leave session** (Control panel) returns you to the chooser from either mode. Leaving Shared detaches only *you* — the server-owned shell keeps running for everyone else. Leaving a terminal session ends that shell.
+- Switching to your terminal session releases control immediately if you held it, and typing in it never needs control. Keystrokes never cross sessions: input is tagged with its session, and anything in flight during a switch is dropped, not misdelivered.
+- A terminal session lives only while you are attached — switching to Shared, closing the tab, or losing the connection kills it, with no scrollback or reattach. Durability is tmux's job: start `tmux` inside it and it daemonizes out of the session's process tree, so reconnect → Terminal → `tmux attach` resumes your work.
 - It is your own *shell*, not a sandbox: same OS user, filesystem, and visible processes as the shared session. Treat it with the same care.
 
 ### File transfer
@@ -148,23 +159,23 @@ The launcher forwards its arguments straight to the bundled server:
 
 ```
 ./bin/rinnegan                              # start the server (default: serve)
-./bin/rinnegan serve                        # start the server explicitly
+./bin/rinnegan serve [--https] [--no-auth]  # serve; --no-auth disables all authentication
 ./bin/rinnegan user add    --username <name> [--role admin|user]
 ./bin/rinnegan user passwd --username <name>
 ./bin/rinnegan user list
 ```
 
-`--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart.
+`--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart. `serve` refuses to start with zero users unless `--no-auth` is given.
 
 ### Security
 
 **Treat rinnegan like SSH access — it is a shell on the machine it runs on.**
 
 - Binds **`127.0.0.1`** by default; keep it there unless a properly authenticated, TLS-terminating proxy is in front.
-- Auth is required everywhere; WebSocket upgrades are validated before completing and rejected with close code 4401 when unauthenticated.
+- Auth is required everywhere by default: WebSocket upgrades are validated before completing and rejected with close code 4401 when unauthenticated. `serve --no-auth` is the one deliberate exception — it disables all authentication and hands a host shell to anyone who reaches the port, so use it only on a trusted, isolated box.
 - Only scrypt password hashes are stored; passwords and session tokens are never logged.
 - **No login rate limiting** — do not expose beyond a trusted network without HTTPS and network-level access controls.
-- **Change the default `admin` / `changeme` password immediately.**
+- **No user is seeded on first run** — create accounts with `user add`, and pick strong passwords; `serve` refuses to start with zero users unless `--no-auth` is set.
 - `~/.config/rinnegan` and its `config.json`, `users.json`, and `state.json` should be readable only by the running user (rinnegan creates the directory mode 0700 and those files mode 0600).
 
 Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bound rinnegan`. The bundled wrapper below is the fastest way there.

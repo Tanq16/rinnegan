@@ -4,14 +4,15 @@ import { addUser, setPassword, listUsers } from '../src/users.js';
 import { start } from '../src/server.js';
 
 const USAGE = `usage:
-  rinnegan serve [--https]
+  rinnegan serve [--https] [--no-auth]
   (--https serves via the bundled Caddy with a self-signed cert on :8443)
+  (--no-auth disables all authentication; anyone who reaches the port gets a host shell)
   rinnegan user add --username <name> [--role admin|user]
   rinnegan user passwd --username <name>
   rinnegan user list
 `;
 
-const BOOLEAN_FLAGS = new Set(['https']);
+const BOOLEAN_FLAGS = new Set(['https', 'no-auth']);
 
 function usageExit() {
   process.stderr.write(USAGE);

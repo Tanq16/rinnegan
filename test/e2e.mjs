@@ -168,8 +168,8 @@ class WSClient {
   terminate() { try { this.ws.terminate(); } catch { /* already dead */ } }
 }
 
-function startServer(homeDir) {
-  const child = spawn(process.execPath, [BIN, 'serve'], {
+function startServer(homeDir, extraArgs = []) {
+  const child = spawn(process.execPath, [BIN, 'serve', ...extraArgs], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, HOME: homeDir },
@@ -206,7 +206,7 @@ function getCookiePair(res, name) {
   return null;
 }
 
-function assertHelloShape(msg, username, role) {
+function assertHelloShape(msg, username, role, { offerShared = true, authOn = true } = {}) {
   assert.equal(msg.t, 'hello', `first message must be hello, got ${JSON.stringify(msg)}`);
   assert.ok(msg.you && msg.size && msg.state, 'hello missing you/size/state');
   assert.equal(msg.you.username, username);
@@ -218,6 +218,36 @@ function assertHelloShape(msg, username, role) {
   // buffer is delivered only on shared attach, so hello must carry no bufferBytes
   assert.ok(!('bufferBytes' in msg), 'hello must not carry bufferBytes');
   assert.ok(Number.isInteger(msg.epoch), 'hello.epoch must be an integer');
+  assert.equal(msg.offerShared, offerShared, `hello.offerShared must be ${offerShared}`);
+  assert.equal(msg.authOn, authOn, `hello.authOn must be ${authOn}`);
+}
+
+async function withTierServer({ users, noAuth }, fn) {
+  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-tier-'));
+  const cfgDir = path.join(home, '.config', 'rinnegan');
+  await fs.promises.mkdir(cfgDir, { recursive: true });
+  await fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
+    listen: { host: '127.0.0.1', port: PORT },
+    cookie: { secure: false, name: 'rinnegan', ttlSeconds: 3600 },
+    terminal: { shell: '/usr/bin/env sh -l', cwd: home, cols: 120, rows: 36, autoRestartShell: false },
+    control: { mode: 'soft', staleControllerSeconds: 5, requestTimeoutSeconds: 30 },
+    buffer: { maxBytes: 65536 },
+  }, null, 2) + '\n');
+  if (users && users.length) {
+    await fs.promises.writeFile(path.join(cfgDir, 'users.json'),
+      JSON.stringify({ users }, null, 2) + '\n', { mode: 0o600 });
+  }
+  const srv = startServer(home, noAuth ? ['--no-auth'] : []);
+  try {
+    return await fn(srv);
+  } finally {
+    if (srv.child.exitCode === null) {
+      srv.child.kill('SIGTERM');
+      const gone = new Promise((r) => srv.child.once('exit', r));
+      await withTimeout(gone, 2000, 'tier server exit').catch(() => srv.child.kill('SIGKILL'));
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -228,6 +258,67 @@ async function main() {
   const track = (c) => { clients.push(c); return c; };
 
   try {
+    await check('serve with 0 users and auth on refuses to start', async () => {
+      await withTierServer({ users: [] }, async (srv) => {
+        srv.ready.catch(() => {}); // no port is ever printed; we assert on the exit instead
+        const code = await withTimeout(new Promise((r) => srv.child.once('exit', r)), 8000, 'server exit');
+        assert.equal(code, 1, `expected exit 1 with no users, got ${code}`);
+        const err = srv.getStderr();
+        assert.match(err, /rinnegan user add/, 'error must name `rinnegan user add`');
+        assert.match(err, /--no-auth/, 'error must name --no-auth');
+      });
+    });
+
+    await check('serve --no-auth binds as nobody with no shared tier', async () => {
+      await withTierServer({ noAuth: true }, async (srv) => {
+        const { port } = await withTimeout(srv.ready, 15000, 'no-auth server listening');
+        const root = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
+        assert.equal(root.status, 200, 'GET / must serve the SPA without a cookie under --no-auth');
+        const c = new WSClient(`ws://127.0.0.1:${port}/ws`, null);
+        try {
+          assertHelloShape(await c.nextText(5000, 'nobody hello'), 'nobody', 'admin',
+            { offerShared: false, authOn: false });
+          c.send({ t: 'shared', cols: 100, rows: 30 });
+          const err = await c.waitText((m) => m.t === 'error', 5000, 'shared rejected under no-auth');
+          assert.match(err.msg, /shared session unavailable/);
+          await sleep(500);
+          assert.equal(c.bin.length, 0, 'no shared PTY output may reach a no-auth client');
+        } finally {
+          c.terminate();
+        }
+        const warn = srv.getStderr();
+        assert.match(warn, /--no-auth disables authentication/, 'must warn that auth is disabled');
+        assert.equal((warn.match(/--no-auth disables authentication/g) || []).length, 1,
+          'exactly one --no-auth warning line');
+      });
+    });
+
+    await check('serve with 1 user offers a terminal-only lobby', async () => {
+      const users = [{ username: 'solo', role: 'admin', password: await hashPassword('solo-pass') }];
+      await withTierServer({ users }, async (srv) => {
+        const { port } = await withTimeout(srv.ready, 15000, '1-user server listening');
+        const res = await fetch(`http://127.0.0.1:${port}/login`, {
+          method: 'POST',
+          redirect: 'manual',
+          body: new URLSearchParams({ username: 'solo', password: 'solo-pass' }),
+        });
+        assert.equal(res.status, 302);
+        const cookie = getCookiePair(res, 'rinnegan').split(';')[0];
+        const c = new WSClient(`ws://127.0.0.1:${port}/ws`, cookie);
+        try {
+          assertHelloShape(await c.nextText(5000, 'solo hello'), 'solo', 'admin',
+            { offerShared: false, authOn: true });
+          c.send({ t: 'shared', cols: 100, rows: 30 });
+          const err = await c.waitText((m) => m.t === 'error', 5000, 'shared rejected for a solo user');
+          assert.match(err.msg, /shared session unavailable/);
+          await sleep(500);
+          assert.equal(c.bin.length, 0, 'the shared PTY must not spawn at boot with a single user');
+        } finally {
+          c.terminate();
+        }
+      });
+    });
+
     const cfgDir = path.join(tmp, '.config', 'rinnegan');
     await fs.promises.mkdir(cfgDir, { recursive: true });
 
