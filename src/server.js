@@ -32,7 +32,7 @@ function startCaddy(root, flags) {
 }
 
 // Runtime Caddyfile lives under configDir() so it survives the updater wiping the release dir.
-function resolveCaddyfile(root, flags) {
+export function resolveCaddyfile(root, flags) {
   if (flags['caddyfile']) {
     const explicit = path.resolve(flags['caddyfile']);
     if (!existsSync(explicit)) throw new Error(`--https requires a Caddyfile; not found at ${explicit}.`);

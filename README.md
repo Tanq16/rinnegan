@@ -167,13 +167,14 @@ The launcher forwards its arguments straight to the bundled server:
 
 ```
 ./bin/rinnegan                              # start the server (default: serve)
-./bin/rinnegan serve [--https] [--no-auth]  # serve; --no-auth disables all authentication
+./bin/rinnegan serve [--https] [--no-auth] [--refresh-caddyfile]  # serve; --no-auth disables all authentication
 ./bin/rinnegan user add    --username <name> [--role admin|user]
 ./bin/rinnegan user passwd --username <name>
 ./bin/rinnegan user list
+./bin/rinnegan tunnel --server <url> --local <port> --remote <port> --username <name> [--insecure]  # forward a local port to the server
 ```
 
-`--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart. `serve` refuses to start with zero users unless `--no-auth` is given.
+`--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart. `serve` refuses to start with zero users unless `--no-auth` is given. `tunnel` forwards your `localhost:<local>` to the server's `localhost:<remote>` over an authenticated WebSocket (password prompted; `--insecure` accepts Caddy's self-signed cert or a bare IP); `--refresh-caddyfile` reseeds the runtime Caddyfile from the bundled template, discarding local edits.
 
 ### Security
 
@@ -197,8 +198,8 @@ Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bou
 Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LICENSE`). This runs Caddy as a **managed child process** listening on `0.0.0.0:8443` and reverse-proxying to `127.0.0.1:8442`, so rinnegan itself stays localhost-only. Browse to **https://\<host\>:8443**, accept the one-time self-signed warning, and log in. `cookie.secure` is forced to `true` in this mode.
 
 - **Certificate:** issued by Caddy's internal CA, so browsers warn once per client; removing the warning means installing the CA on every client (out of scope).
-- **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/` (via `XDG_DATA_HOME`/`XDG_CONFIG_HOME`); delete it and restart to regenerate the CA.
-- **Ports:** if you change `listen.port`, edit the bundled `Caddyfile` so its `reverse_proxy` target matches (`serve --https` warns if the port is not `8442`).
+- **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/`, and its config is the runtime `~/.config/rinnegan/Caddyfile` (seeded from the bundled template on the first `--https` run, never clobbered after); delete `caddy-data/` and restart to regenerate the CA.
+- **Ports:** if you change `listen.port`, edit `~/.config/rinnegan/Caddyfile`'s `reverse_proxy` target to match — that runtime copy persists across updates (`serve --https` warns if the port is not `8442`). The bundled template only reseeds when you pass `serve --https --refresh-caddyfile`, which discards any runtime edits.
 - **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
 - **Still no rate limiting** even over HTTPS — keep it on a trusted network.
 

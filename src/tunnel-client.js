@@ -3,6 +3,9 @@ import https from 'node:https';
 import { createServer } from 'node:net';
 import WebSocket from 'ws';
 import { info, error } from './log.js';
+import { validatePort } from './tunnel.js';
+
+export { validatePort };
 
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 
@@ -18,11 +21,6 @@ export function cookieFromSetCookie(setCookie) {
   if (typeof first !== 'string') return null;
   const pair = first.split(';')[0].trim();
   return pair.indexOf('=') > 0 ? pair : null;
-}
-
-export function validatePort(value) {
-  const n = Number(value);
-  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
 }
 
 function login({ server, username, password, insecure }) {
@@ -44,6 +42,7 @@ function login({ server, username, password, insecure }) {
       else reject(new Error(`login failed (status ${res.statusCode}); check username and password`));
     });
     req.on('error', reject);
+    req.setTimeout(15000, () => req.destroy(new Error('login timed out')));
     req.end(body);
   });
 }
@@ -73,7 +72,7 @@ export async function runTunnel({ server, localPort, remotePort, username, passw
     const teardown = () => {
       if (closed) return;
       closed = true;
-      socket.destroy();
+      socket.end(); // not destroy(): it drops buffered bytes and truncates the tail
       ws.close();
     };
     // Hold the client bytes until the ws handshake completes, or the first chunk is sent into a CONNECTING socket and lost.

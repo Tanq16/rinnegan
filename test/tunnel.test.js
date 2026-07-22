@@ -48,6 +48,9 @@ test('validatePort accepts 1..65535 integers only', async (t) => {
     { name: 'numeric string ok', in: '3000', want: 3000 },
     { name: 'non-numeric string rejected', in: 'abc', want: null },
     { name: 'empty string rejected', in: '', want: null },
+    { name: 'hex string rejected', in: '0x1f', want: null },
+    { name: 'exponent string rejected', in: '1e3', want: null },
+    { name: 'padded numeric string rejected', in: ' 80 ', want: null },
   ];
   for (const c of cases) {
     await t.test(c.name, () => assert.equal(validatePort(c.in), c.want));
