@@ -285,9 +285,17 @@
       cursorBlink: false, // kitty: cursor_blink_interval 0
       drawBoldTextInBrightColors: false, // kitty does not brighten bold; keep palettes identical
       scrollback: 5000,
+      scrollSensitivity: 2,
       theme: THEME,
     });
     term.open(els.terminal);
+    try {
+      const webgl = new WebglAddon.WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      // WebGL2 unavailable: keep xterm's default DOM renderer
+    }
     // Swallow OSC 10/11/12 color-set escapes so a shell can't recolor the terminal (a side door to the cursor color); queries ("?") fall through so TUIs can still detect theme colors.
     for (const color of [10, 11, 12]) {
       term.parser.registerOscHandler(color, (data) => data !== '?');

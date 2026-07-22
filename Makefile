@@ -17,7 +17,7 @@ CYAN := \033[0;36m
 GREEN := \033[0;32m
 NC := \033[0m
 
-XTERM_VENDOR := $(VENDOR)/xterm.js $(VENDOR)/xterm.css
+XTERM_VENDOR := $(VENDOR)/xterm.js $(VENDOR)/xterm.css $(VENDOR)/addon-webgl.js
 INTER_FONTS  := $(FONTS_DIR)/inter-400.woff2 $(FONTS_DIR)/inter-600.woff2
 # The "Mono" font variant (single-cell icon advances) matches the team's kitty config.
 NERD_FONTS   := $(FONTS_DIR)/JetBrainsMonoNerdFontMono-Regular.woff2 $(FONTS_DIR)/JetBrainsMonoNerdFontMono-Bold.woff2
@@ -44,6 +44,10 @@ $(VENDOR)/xterm.js: node_modules
 $(VENDOR)/xterm.css: node_modules
 	@mkdir -p $(VENDOR)
 	cp node_modules/@xterm/xterm/css/xterm.css $@
+
+$(VENDOR)/addon-webgl.js: node_modules
+	@mkdir -p $(VENDOR)
+	cp node_modules/@xterm/addon-webgl/lib/addon-webgl.js $@
 
 $(FONTS_DIR)/inter-400.woff2: node_modules
 	@mkdir -p $(FONTS_DIR)

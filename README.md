@@ -10,13 +10,19 @@
 
 A minimal self-hosted **shared web terminal**: one server-owned shell PTY, many authenticated browser viewers, and exactly one active keyboard controller at a time. Everyone sees the same live output; users take or request control to type. The shell is a normal interactive shell on the host — for persistence, panes, or long-running work, start `tmux` or `zellij` inside it, in the shared session or a per-user [terminal session](#terminal-sessions).
 
+The intent is to bring the shell experience of my [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) to remote and shared use: a web terminal for remote systems, shared sessions, direct tunnel access, and a full host shell — the same environment, reachable from a browser.
+
 It is **not** an IDE, a task manager, or a tmux manager — just a shared terminal frontend, like a web-based SSH client for a small trusted team collaborating in one environment. The common use case is a homelab workspace or a cloud VPS.
+
+> [!NOTE]
+> The shell experience rinnegan targets is the one from my [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) — read that project's README for its specifics and requirements as needed.
 
 ## Features
 
 - **Shared, server-owned PTY** — one shell process on the host, streamed live to every browser over WebSocket; no one's local state drifts.
 - **Exactly one keyboard controller** — soft (request/grant) or fast (take instantly); admins can force, release, or switch modes. See [Control](#control).
 - **Per-user terminal sessions** — your own fresh shell on the same host without disturbing the shared terminal, torn down on disconnect. See [Terminal sessions](#terminal-sessions).
+- **Authenticated port tunnel** — any logged-in user forwards their `localhost:<port>` to a `localhost` port on the server over an authenticated WebSocket (`rinnegan tunnel`) — `ssh -L` without SSH. See [CLI](#cli).
 - **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
 - **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
 - **Self-contained tarball** — each release bundles its own Node runtime and a platform-native `node-pty`; the host needs no Node, Python, compiler, or `make`.
@@ -160,6 +166,7 @@ Bytes are streamed to disk with a `POST`, with **no size cap** and a live progre
 - **Palette:** Catppuccin Mocha, hex values taken from the kitty config in [`Tanq16/cli-Productivity-Suite`](https://github.com/Tanq16/cli-Productivity-Suite) so the web terminal matches the native setup. Bold cells are not brightened (matching kitty); true 24-bit color is enabled end to end. Baked in, not configurable.
 - **Cursor:** locked to a steady rosewater beam (kitty's `cursor_shape beam`, no blink) — OSC 10/11/12 color escapes are filtered and DECSCUSR blink bits stripped, so nothing run in the shell can recolor it or make it blink.
 - **Fonts:** terminal in **JetBrains Mono Nerd Font Mono** (single-cell "Mono" variant, 400/700), UI in **Inter** (400/600), both bundled as woff2 with a `monospace` fallback. All font files are committed and shipped in every tarball, so no font tooling is needed to build or run.
+- **Rendering:** GPU-accelerated via xterm's WebGL renderer, falling back to the DOM renderer when WebGL2 is unavailable — keeps full-screen TUI repaints (scrolling inside `tmux`, editors, or other TUIs) smooth.
 
 ### CLI
 
