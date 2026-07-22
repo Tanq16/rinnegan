@@ -285,7 +285,7 @@
       cursorBlink: false, // kitty: cursor_blink_interval 0
       drawBoldTextInBrightColors: false, // kitty does not brighten bold; keep palettes identical
       scrollback: 5000,
-      scrollSensitivity: 3,
+      scrollSensitivity: 2,
       theme: THEME,
     });
     term.open(els.terminal);
