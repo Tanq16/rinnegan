@@ -100,6 +100,11 @@ jobs:
       - name: Install dependencies (compile node-pty native from source)
         run: npm_config_build_from_source=true npm ci
 
+      - name: Stamp release version into package.json
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: npm pkg set version="${VERSION#v}"
+
       - name: Build bundle
         run: make bundle
 
