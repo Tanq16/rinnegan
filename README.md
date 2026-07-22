@@ -14,6 +14,9 @@ The intent is to bring the shell experience of my [CLI Productivity Suite](https
 
 It is **not** an IDE, a task manager, or a tmux manager — just a shared terminal frontend, like a web-based SSH client for a small trusted team collaborating in one environment. The common use case is a homelab workspace or a cloud VPS.
 
+> [!NOTE]
+> The shell experience rinnegan targets is the one from my [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) — read that project's README for its specifics and requirements as needed.
+
 ## Features
 
 - **Shared, server-owned PTY** — one shell process on the host, streamed live to every browser over WebSocket; no one's local state drifts.
