@@ -4,7 +4,7 @@ import { spawnRawPty } from './pty.js';
 const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
 
-export function attachWebSocket(httpServer, { config, session, control, authenticate, offerShared, authOn }) {
+export function attachWebSocket({ config, session, control, authenticate, offerShared, authOn }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
   const sockets = new Map();
 
@@ -340,26 +340,15 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
     });
   }
 
-  httpServer.on('upgrade', (req, socket, head) => {
-    let pathname;
-    try {
-      pathname = new URL(req.url, 'http://x').pathname;
-    } catch {
-      socket.destroy();
-      return;
-    }
-    if (pathname !== '/ws') {
-      socket.destroy();
-      return;
-    }
-    // Auth strictly before any protocol activity; bare handshake only carries the close code.
+  // Auth strictly before any protocol activity; bare handshake only carries the close code.
+  function handleUpgrade(req, socket, head) {
     const user = authenticate(req);
     if (!user) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4401, 'auth required'));
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, user));
-  });
+  }
 
   setInterval(() => {
     const now = Date.now();
@@ -368,4 +357,6 @@ export function attachWebSocket(httpServer, { config, session, control, authenti
       else ws.ping();
     }
   }, PING_INTERVAL_MS);
+
+  return { handleUpgrade };
 }

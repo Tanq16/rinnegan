@@ -3,11 +3,13 @@
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { hashPassword } from '../src/auth.js';
+import { runTunnel } from '../src/tunnel-client.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BIN = path.join(ROOT, 'bin', 'rinnegan.js');
@@ -188,6 +190,17 @@ function startServer(homeDir, extraArgs = []) {
     scan();
   }), 15000, 'server "listening" line');
   return { child, ready, getStderr: () => stderr };
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.once('error', reject);
+    s.listen(0, '127.0.0.1', () => {
+      const p = s.address().port;
+      s.close(() => resolve(p));
+    });
+  });
 }
 
 // exit code of a local command, or null if it could not be spawned (not on PATH)
@@ -433,6 +446,61 @@ async function main() {
       const closed = await c.waitClose(5000, 'unauthenticated ws close');
       // WS auth must reject before accepting the socket: handshake completes only to deliver 4401 (1006 = raw HTTP reject)
       assert.ok(closed.code === 4401 || closed.code === 1006, `expected 4401 (or 1006), got ${closed.code}`);
+    });
+
+    await check('tunnel round-trips bytes to a loopback service', async () => {
+      const echo = net.createServer((s) => s.pipe(s));
+      await new Promise((r) => echo.listen(0, '127.0.0.1', r));
+      const echoPort = echo.address().port;
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=${echoPort}`, cookieAdmin));
+      try {
+        await c.waitOpen(5000);
+        c.ws.send(Buffer.from('E2E_TUNNEL_ROUNDTRIP'));
+        await c.waitBinContains('E2E_TUNNEL_ROUNDTRIP', 0, 5000, 'tunnel echo bytes');
+      } finally {
+        c.ws.close();
+        echo.close();
+      }
+    });
+
+    await check('unauthenticated /tunnel upgrade rejected (4401)', async () => {
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=1`, null));
+      const closed = await c.waitClose(5000, 'unauthenticated tunnel close');
+      assert.ok(closed.code === 4401 || closed.code === 1006, `expected 4401 (or 1006), got ${closed.code}`);
+    });
+
+    await check('/tunnel with a bad port rejected (4400)', async () => {
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=0`, cookieAdmin));
+      const closed = await c.waitClose(5000, 'bad-port tunnel close');
+      assert.equal(closed.code, 4400, `expected 4400, got ${closed.code}`);
+    });
+
+    await check('client runTunnel logs in and round-trips bytes through the pipe', async () => {
+      const echo = net.createServer((s) => s.pipe(s));
+      await new Promise((r) => echo.listen(0, '127.0.0.1', r));
+      const echoPort = echo.address().port;
+      const localPort = await freePort();
+      const listener = await runTunnel({
+        server: base, localPort, remotePort: echoPort,
+        username: 'tanish', password: ADMIN_PASS, insecure: false,
+      });
+      const sock = net.connect(localPort, '127.0.0.1');
+      try {
+        const got = await withTimeout(new Promise((resolve, reject) => {
+          const chunks = [];
+          sock.on('data', (d) => {
+            chunks.push(d);
+            if (Buffer.concat(chunks).includes('E2E_CLIENT_TUNNEL')) resolve(Buffer.concat(chunks));
+          });
+          sock.on('error', reject);
+          sock.on('connect', () => sock.write('E2E_CLIENT_TUNNEL'));
+        }), 5000, 'client tunnel echo bytes');
+        assert.ok(got.includes('E2E_CLIENT_TUNNEL'), 'client tunnel did not echo bytes end-to-end');
+      } finally {
+        sock.destroy();
+        listener.close();
+        echo.close();
+      }
     });
 
     const admin = track(new WSClient(wsUrl, cookieAdmin));
