@@ -50,12 +50,12 @@ function methodNotAllowed(res, allow) {
 }
 
 function unauthorized(res) {
-  // Connection: close — an unauthenticated upload's unread body would poison keep-alive
+  // Connection: close — an unauthenticated request's unread body would poison keep-alive
   res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
   res.end('auth required');
 }
 
-export function createHttpServer({ authenticate, login, makeSessionCookie, clearSessionCookie, publicDir }) {
+export function createHttpServer({ authenticate, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
   async function handleLogin(req, res) {
     const body = await readBody(req, MAX_LOGIN_BODY);
     if (body === null) {
@@ -67,6 +67,16 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
     const user = await login(params.get('username') ?? '', params.get('password') ?? '');
     if (user) return redirect(res, '/', makeSessionCookie(user));
     return redirect(res, '/login?error=1');
+  }
+
+  function handleRefresh(req, res) {
+    const result = refresh(req);
+    if (!result) return unauthorized(res);
+    // Connection: close — /refresh doesn't drain its body, so an unread body would poison keep-alive.
+    const headers = { 'Content-Type': 'application/json', Connection: 'close' };
+    if (result.setCookie) headers['Set-Cookie'] = result.setCookie;
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ accessExpiresAt: result.accessExpiresAt }));
   }
 
   async function route(req, res) {
@@ -101,6 +111,11 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return redirect(res, '/login', clearSessionCookie());
     }
 
+    if (pathname === '/refresh') {
+      if (method !== 'POST') return methodNotAllowed(res, 'POST');
+      return handleRefresh(req, res);
+    }
+
     if (pathname === '/upload') {
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       const user = authenticate(req);
@@ -121,7 +136,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return handleDownload(req, res, searchParams, user.username);
     }
 
-    if (pathname === '/styles.css' || pathname === '/app.js' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {
+    if (pathname === '/styles.css' || pathname === '/app.js' || pathname === '/logo.svg' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
       return serveStatic(req, res, publicDir, pathname);
     }

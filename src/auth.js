@@ -54,6 +54,7 @@ export function signSession(claims, secret, ttlSeconds) {
   const payload = {
     sub: claims.sub,
     role: claims.role,
+    typ: claims.typ,
     iat: now,
     exp: now + ttlSeconds,
     sid: randomBytes(8).toString('hex'),
@@ -62,7 +63,7 @@ export function signSession(claims, secret, ttlSeconds) {
   return body + '.' + hmac(body, secret).toString('base64url');
 }
 
-export function verifySession(token, secret) {
+export function verifySession(token, secret, expectedType) {
   try {
     if (!token || typeof token !== 'string') return null;
     const dot = token.indexOf('.');
@@ -75,6 +76,7 @@ export function verifySession(token, secret) {
     if (!payload || typeof payload !== 'object') return null;
     if (typeof payload.sub !== 'string' || typeof payload.role !== 'string') return null;
     if (typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (expectedType !== undefined && payload.typ !== expectedType) return null;
     return payload;
   } catch {
     return null;
@@ -98,8 +100,8 @@ export function parseCookies(header) {
   return out;
 }
 
-export function serializeCookie(name, value, { maxAge, secure }) {
-  let cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Lax`;
+export function serializeCookie(name, value, { maxAge, secure, path = '/' }) {
+  let cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=${path}; HttpOnly; SameSite=Lax`;
   if (secure) cookie += '; Secure';
   return cookie;
 }

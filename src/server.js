@@ -91,29 +91,62 @@ export function start(cfg, flags = {}) {
     maxBufferBytes: cfg.buffer.maxBytes,
   });
 
+  const refreshCookieName = cfg.cookie.name + '_rt';
+
   const authenticate = noAuth
     ? () => ({ username: 'nobody', role: 'admin' })
     : (req) => {
-        const payload = verifySession(parseCookies(req.headers.cookie)[cfg.cookie.name], secret);
-        return payload ? { username: payload.sub, role: payload.role } : null;
+        const payload = verifySession(parseCookies(req.headers.cookie)[cfg.cookie.name], secret, 'access');
+        return payload ? { username: payload.sub, role: payload.role, accessExp: payload.exp } : null;
       };
 
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
 
+  const terminal = attachWebSocket({ config: cfg, session, control, authenticate, offerShared, authOn });
+
+  const refresh = noAuth
+    ? () => ({ accessExpiresAt: null })
+    : (req) => {
+        const token = parseCookies(req.headers.cookie)[refreshCookieName];
+        const payload = verifySession(token, secret, 'refresh');
+        if (!payload) return null;
+        // Re-check the user against the current roster so a deleted user can't refresh forever and a role change lands within one access-TTL.
+        const cur = listUsers(cfg.usersFile).find((u) => u.username === payload.sub);
+        if (!cur) return null;
+        const now = Math.floor(Date.now() / 1000);
+        const exp = now + cfg.cookie.accessTtlSeconds;
+        const setCookie = serializeCookie(
+          cfg.cookie.name,
+          signSession({ sub: cur.username, role: cur.role, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
+          { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
+        );
+        terminal.touchUser(cur.username, exp, cur.role);
+        return { setCookie, accessExpiresAt: exp };
+      };
+
   const server = createHttpServer({
     authenticate,
     login: (username, password) => verifyLogin(cfg.usersFile, username, password),
-    makeSessionCookie: (user) =>
+    // Access cookie MUST be first: the CLI tunnel client extracts the first Set-Cookie pair.
+    makeSessionCookie: (user) => [
       serializeCookie(
         cfg.cookie.name,
-        signSession({ sub: user.username, role: user.role }, secret, cfg.cookie.ttlSeconds),
-        { maxAge: cfg.cookie.ttlSeconds, secure: cfg.cookie.secure }
+        signSession({ sub: user.username, role: user.role, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
+        { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
       ),
-    clearSessionCookie: () => serializeCookie(cfg.cookie.name, '', { maxAge: 0, secure: cfg.cookie.secure }),
+      serializeCookie(
+        refreshCookieName,
+        signSession({ sub: user.username, role: user.role, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
+        { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: '/refresh' }
+      ),
+    ],
+    clearSessionCookie: () => [
+      serializeCookie(cfg.cookie.name, '', { maxAge: 0, secure: cfg.cookie.secure }),
+      serializeCookie(refreshCookieName, '', { maxAge: 0, secure: cfg.cookie.secure, path: '/refresh' }),
+    ],
+    refresh,
     publicDir,
   });
-
-  const terminal = attachWebSocket({ config: cfg, session, control, authenticate, offerShared, authOn });
   const tunnel = attachTunnel({ authenticate });
   server.on('upgrade', (req, socket, head) => {
     let pathname;

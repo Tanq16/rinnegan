@@ -347,9 +347,21 @@ body.login-page {
   border-radius: 10px;
   padding: 28px;
 }
-.login-card h1 {
-  margin: 0 0 18px;
-  font-size: 18px;
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0 0 22px;
+}
+.login-logo {
+  width: 60px;
+  height: 60px;
+}
+.login-wordmark {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: .01em;
   color: var(--mauve);
 }
 .login-card label {

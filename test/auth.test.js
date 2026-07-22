@@ -21,13 +21,26 @@ function forge(payloadObj, secret) {
 const now = () => Math.floor(Date.now() / 1000);
 
 test('signSession/verifySession round trip', () => {
-  const token = signSession({ sub: 'alice', role: 'admin' }, SECRET, 3600);
+  const token = signSession({ sub: 'alice', role: 'admin', typ: 'access' }, SECRET, 3600);
   const payload = verifySession(token, SECRET);
   assert.equal(payload.sub, 'alice');
   assert.equal(payload.role, 'admin');
+  assert.equal(payload.typ, 'access');
   assert.equal(payload.exp - payload.iat, 3600);
   assert.equal(typeof payload.sid, 'string');
   assert.equal(payload.sid.length, 16);
+});
+
+test('verifySession enforces the expected token type', () => {
+  const access = signSession({ sub: 'alice', role: 'user', typ: 'access' }, SECRET, 3600);
+  const refresh = signSession({ sub: 'alice', role: 'user', typ: 'refresh' }, SECRET, 3600);
+  assert.ok(verifySession(access, SECRET, 'access'));
+  assert.ok(verifySession(refresh, SECRET, 'refresh'));
+  assert.equal(verifySession(refresh, SECRET, 'access'), null, 'a refresh token must not pass as access');
+  assert.equal(verifySession(access, SECRET, 'refresh'), null, 'an access token must not pass as refresh');
+  const noTyp = signSession({ sub: 'alice', role: 'user' }, SECRET, 3600);
+  assert.equal(verifySession(noTyp, SECRET, 'access'), null, 'a token with no typ must be rejected when a typ is expected');
+  assert.ok(verifySession(noTyp, SECRET), 'no expected type still verifies a typ-less token');
 });
 
 test('verifySession rejects bad tokens', async (t) => {
