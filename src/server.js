@@ -1,22 +1,21 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadState, saveState, configDir } from './config.js';
+import { loadState, saveState, configDir, atomicWriteFileSync } from './config.js';
 import { parseCookies, verifySession, signSession, serializeCookie } from './auth.js';
 import { verifyLogin, listUsers } from './users.js';
 import { createPtySession } from './pty.js';
 import { createControl } from './control.js';
 import { createHttpServer } from './http.js';
 import { attachWebSocket } from './ws.js';
+import { attachTunnel } from './tunnel.js';
 import { info, error } from './log.js';
 
 function startCaddy(root, flags) {
   const caddyBin = flags['caddy-bin'] ? path.resolve(flags['caddy-bin'])
     : root ? path.join(root, 'bin', 'caddy') : null;
-  const caddyfile = flags['caddyfile'] ? path.resolve(flags['caddyfile'])
-    : root ? path.join(root, 'Caddyfile') : null;
   const dataDir = flags['caddy-data'] ? path.resolve(flags['caddy-data'])
     : path.join(configDir(), 'caddy-data');
   if (!caddyBin || !existsSync(caddyBin)) {
@@ -25,13 +24,33 @@ function startCaddy(root, flags) {
       `Run rinnegan from a release bundle, or pass --caddy-bin <path> --caddyfile <path>.`
     );
   }
-  if (!caddyfile || !existsSync(caddyfile)) {
-    throw new Error(`--https requires a Caddyfile; not found at ${caddyfile ?? '<unknown>'}.`);
-  }
+  const caddyfile = resolveCaddyfile(root, flags);
   return spawn(caddyBin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], {
     stdio: 'inherit',
     env: { ...process.env, XDG_DATA_HOME: dataDir, XDG_CONFIG_HOME: dataDir },
   });
+}
+
+// Runtime Caddyfile lives under configDir() so it survives the updater wiping the release dir.
+function resolveCaddyfile(root, flags) {
+  if (flags['caddyfile']) {
+    const explicit = path.resolve(flags['caddyfile']);
+    if (!existsSync(explicit)) throw new Error(`--https requires a Caddyfile; not found at ${explicit}.`);
+    return explicit;
+  }
+  const runtime = path.join(configDir(), 'Caddyfile');
+  const template = root ? path.join(root, 'Caddyfile') : null;
+  const refresh = flags['refresh-caddyfile'] === true;
+  const haveRuntime = existsSync(runtime);
+  if (refresh || !haveRuntime) {
+    if (!template || !existsSync(template)) {
+      if (!haveRuntime) throw new Error(`--https requires a Caddyfile; not found at ${template ?? '<unknown>'}.`);
+    } else {
+      if (refresh && haveRuntime) process.stderr.write(`warning: --refresh-caddyfile overwrites ${runtime}; local edits are discarded\n`);
+      atomicWriteFileSync(runtime, readFileSync(template), 0o600);
+    }
+  }
+  return runtime;
 }
 
 export function start(cfg, flags = {}) {
@@ -94,7 +113,15 @@ export function start(cfg, flags = {}) {
     publicDir,
   });
 
-  attachWebSocket(server, { config: cfg, session, control, authenticate, offerShared, authOn });
+  const terminal = attachWebSocket({ config: cfg, session, control, authenticate, offerShared, authOn });
+  const tunnel = attachTunnel({ authenticate });
+  server.on('upgrade', (req, socket, head) => {
+    let pathname;
+    try { ({ pathname } = new URL(req.url, 'http://x')); } catch { socket.destroy(); return; }
+    if (pathname === '/ws') { terminal.handleUpgrade(req, socket, head); return; }
+    if (pathname === '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
+    socket.destroy();
+  });
 
   if (offerShared) {
     try {

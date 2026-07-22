@@ -43,7 +43,7 @@ function check(cond, msg) {
   if (!cond) throw new Error('invalid config: ' + msg);
 }
 
-function atomicWriteFileSync(file, data, mode) {
+export function atomicWriteFileSync(file, data, mode) {
   const tmp = file + '.' + randomBytes(6).toString('hex') + '.tmp';
   writeFileSync(tmp, data, { mode });
   renameSync(tmp, file);

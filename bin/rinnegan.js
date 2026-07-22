@@ -3,18 +3,23 @@ import { readFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { addUser, setPassword, listUsers } from '../src/users.js';
 import { start } from '../src/server.js';
+import { runTunnel, validatePort } from '../src/tunnel-client.js';
 
 const USAGE = `usage:
-  rinnegan serve [--https] [--no-auth]
+  rinnegan serve [--https] [--no-auth] [--refresh-caddyfile]
   (--https serves via the bundled Caddy with a self-signed cert on :8443)
   (--no-auth disables all authentication; anyone who reaches the port gets a host shell)
+  (--refresh-caddyfile overwrites the runtime Caddyfile from the shipped template, discarding local edits)
+  rinnegan tunnel --server <url> --local <port> --remote <port> --username <name> [--insecure]
+  (forwards localhost:<local> to the server's localhost:<remote> over an authenticated WebSocket)
+  (--insecure skips TLS verification, for the bundled self-signed Caddy cert or a bare IP)
   rinnegan user add --username <name> [--role admin|user]
   rinnegan user passwd --username <name>
   rinnegan user list
   rinnegan version
 `;
 
-const BOOLEAN_FLAGS = new Set(['https', 'no-auth']);
+const BOOLEAN_FLAGS = new Set(['https', 'no-auth', 'refresh-caddyfile', 'insecure']);
 
 function usageExit() {
   process.stderr.write(USAGE);
@@ -119,6 +124,17 @@ async function userPasswd(flags) {
   await setPassword(cfg.usersFile, username, password);
 }
 
+async function tunnel(flags) {
+  const server = requireFlag(flags, 'server');
+  const username = requireFlag(flags, 'username');
+  const localPort = validatePort(requireFlag(flags, 'local'));
+  if (localPort === null) throw new Error('--local must be a port 1-65535');
+  const remotePort = validatePort(requireFlag(flags, 'remote'));
+  if (remotePort === null) throw new Error('--remote must be a port 1-65535');
+  const password = await promptPassword(`Password for ${username}: `);
+  await runTunnel({ server, localPort, remotePort, username, password, insecure: flags.insecure === true });
+}
+
 function userList() {
   const cfg = loadConfig();
   for (const user of listUsers(cfg.usersFile)) {
@@ -138,6 +154,8 @@ async function main() {
   switch (command) {
     case 'serve':
       return start(loadConfig(), flags);
+    case 'tunnel':
+      return tunnel(flags);
     case 'user add':
       return userAdd(flags);
     case 'user passwd':
