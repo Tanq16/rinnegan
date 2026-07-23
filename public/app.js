@@ -180,8 +180,7 @@
     refreshRetry = 0;
   }
 
-  // Transient failures only; a real 401 (in doRefresh) is the sole route to /login. Exhausting the
-  // burst just waits for the next periodic check rather than bouncing on a flaky network.
+  // Transient-only backoff: a real 401 (doRefresh) is the sole route to /login; exhaustion waits for the next periodic check.
   function retryRefresh() {
     if (refreshRetry >= REFRESH_BACKOFF_MS.length) { refreshRetry = 0; return; }
     refreshTimer = setTimeout(doRefresh, REFRESH_BACKOFF_MS[refreshRetry++]);

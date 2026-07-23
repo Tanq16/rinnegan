@@ -375,7 +375,7 @@ async function main() {
       assert.ok((res.headers.get('content-type') || '').includes('text/html'));
     });
 
-    await check('login page ships the silent-resume probe (decision 6)', async () => {
+    await check('login page ships the silent-resume probe', async () => {
       const html = await (await get('/login')).text();
       assert.match(html, /fetch\(\s*['"]\/refresh['"]/, 'login must POST /refresh on load to silently resume a valid session');
     });

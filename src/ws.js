@@ -10,7 +10,7 @@ const MAX_MISSED_REFRESHES = 4;
 export function evaluateSocket(meta, nowMs, findUser, accessTtlSeconds) {
   if (nowMs - meta.lastSeen > STALE_MS) return 'terminate';
   const nowSec = Math.floor(nowMs / 1000);
-  if (nowSec <= meta.deadline + GRACE_SECONDS) return 'ping'; // Infinity deadline (no-auth) always lands here
+  if (nowSec <= meta.deadline + GRACE_SECONDS) return 'ping'; // Infinity (no-auth) never reaches the roster
   const user = findUser(meta.username);
   if (!user) return 'close';
   if (meta.missedRefreshes >= MAX_MISSED_REFRESHES) return 'close';
@@ -36,7 +36,6 @@ export function refreshMeta(meta, newExp, newRole) {
   if (newRole !== undefined) meta.role = newRole;
 }
 
-// A refresh slides only the refreshing user's live sockets forward (never closing an active tab); other users' sessions are untouched.
 export function refreshUserSockets(sockets, username, newExp, newRole) {
   for (const meta of sockets.values()) {
     if (meta.username === username) refreshMeta(meta, newExp, newRole);
@@ -398,7 +397,7 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
     const now = Date.now();
     const ttl = config.cookie.accessTtlSeconds;
     let roster; // read lazily, at most once per tick: only a past-deadline socket needs it
-    let rosterErr; // a failed read is cached too, so lookupUser and its log don't repeat per socket
+    let rosterErr;
     const findUser = (username) => {
       if (rosterErr) throw rosterErr;
       if (roster === undefined) {
