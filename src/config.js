@@ -110,7 +110,7 @@ export function loadConfig() {
     Number.isInteger(cfg.buffer.maxBytes) && cfg.buffer.maxBytes >= 65536,
     'buffer.maxBytes must be an integer >= 65536'
   );
-  // Cap the access TTL so the client/tunnel refresh setTimeout (~accessTtl*1000 ms) stays under Node's ~24.85-day timer limit; a larger value clamps to ~1ms and hot-loops /refresh.
+  // Cap it: the refresh setTimeout (~accessTtl*1000 ms) hot-loops /refresh if it exceeds Node's ~24.85-day timer limit and clamps to ~1ms.
   check(
     Number.isInteger(cfg.cookie.accessTtlSeconds) && cfg.cookie.accessTtlSeconds >= 60 && cfg.cookie.accessTtlSeconds <= 604800,
     'cookie.accessTtlSeconds must be an integer between 60 and 604800'

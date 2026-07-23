@@ -110,7 +110,7 @@ export function start(cfg, flags = {}) {
         const token = parseCookies(req.headers.cookie)[refreshCookieName];
         const payload = verifySession(token, secret, 'refresh');
         if (!payload) return null;
-        // Re-check the user against the current roster so a deleted user can't refresh forever and a role change lands within one access-TTL.
+        // Re-check the roster: a deleted user can't refresh forever, and a role change lands within one access-TTL.
         const cur = listUsers(cfg.usersFile).find((u) => u.username === payload.sub);
         if (!cur) return null;
         const now = Math.floor(Date.now() / 1000);

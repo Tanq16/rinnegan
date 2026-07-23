@@ -353,7 +353,7 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
     wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, user));
   }
 
-  // A successful /refresh slides every live socket's deadline forward (an active tab is never closed for token reasons) and re-applies the current role, so a demotion lands within one access-TTL.
+  // A refresh slides this user's live sockets forward (never closing an active tab) and re-applies the current role so a demotion lands.
   function touchUser(username, newExp, newRole) {
     for (const meta of sockets.values()) {
       if (meta.username !== username) continue;
