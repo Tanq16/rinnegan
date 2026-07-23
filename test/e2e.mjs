@@ -375,6 +375,11 @@ async function main() {
       assert.ok((res.headers.get('content-type') || '').includes('text/html'));
     });
 
+    await check('login page ships the silent-resume probe (decision 6)', async () => {
+      const html = await (await get('/login')).text();
+      assert.match(html, /fetch\(\s*['"]\/refresh['"]/, 'login must POST /refresh on load to silently resume a valid session');
+    });
+
     await check('vendored css and fonts are served (terminal glyphs depend on it)', async () => {
       const css = await get('/css/jetbrains-mono.css');
       assert.equal(css.status, 200, '/css must be served, else the Nerd Font never loads');
