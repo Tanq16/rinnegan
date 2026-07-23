@@ -1,11 +1,48 @@
 import { WebSocketServer } from 'ws';
 import { spawnRawPty } from './pty.js';
+import { error } from './log.js';
 
 const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
 const GRACE_SECONDS = 60;
+const MAX_MISSED_REFRESHES = 4;
 
-export function attachWebSocket({ config, session, control, authenticate, offerShared, authOn }) {
+export function evaluateSocket(meta, nowMs, findUser, accessTtlSeconds) {
+  if (nowMs - meta.lastSeen > STALE_MS) return 'terminate';
+  const nowSec = Math.floor(nowMs / 1000);
+  if (nowSec <= meta.deadline + GRACE_SECONDS) return 'ping'; // Infinity (no-auth) never reaches the roster
+  const user = findUser(meta.username);
+  if (!user) return 'close';
+  if (meta.missedRefreshes >= MAX_MISSED_REFRESHES) return 'close';
+  meta.deadline += accessTtlSeconds;
+  meta.missedRefreshes++;
+  meta.role = user.role;
+  return 'slide';
+}
+
+// A roster read that momentarily fails must never close a possibly-valid session: degrade to a ping.
+export function evaluateSocketSafe(meta, nowMs, findUser, accessTtlSeconds) {
+  try {
+    return evaluateSocket(meta, nowMs, findUser, accessTtlSeconds);
+  } catch {
+    return 'ping';
+  }
+}
+
+// The only reset of missedRefreshes: a real client /refresh proves the refresh cookie is still valid.
+export function refreshMeta(meta, newExp, newRole) {
+  meta.deadline = newExp;
+  meta.missedRefreshes = 0;
+  if (newRole !== undefined) meta.role = newRole;
+}
+
+export function refreshUserSockets(sockets, username, newExp, newRole) {
+  for (const meta of sockets.values()) {
+    if (meta.username === username) refreshMeta(meta, newExp, newRole);
+  }
+}
+
+export function attachWebSocket({ config, session, control, authenticate, offerShared, authOn, lookupUser }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
   const sockets = new Map();
 
@@ -304,6 +341,7 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
       role: user.role,
       lastSeen: Date.now(),
       deadline: typeof user.accessExp === 'number' ? user.accessExp : Infinity,
+      missedRefreshes: 0,
       mode: 'lobby',
       epoch: 0,
       natural: null,
@@ -353,22 +391,31 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
     wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, user));
   }
 
-  // A refresh slides this user's live sockets forward (never closing an active tab) and re-applies the current role so a demotion lands.
-  function touchUser(username, newExp, newRole) {
-    for (const meta of sockets.values()) {
-      if (meta.username !== username) continue;
-      meta.deadline = newExp;
-      if (newRole !== undefined) meta.role = newRole;
-    }
-  }
+  const touchUser = (username, newExp, newRole) => refreshUserSockets(sockets, username, newExp, newRole);
 
   setInterval(() => {
     const now = Date.now();
-    const nowSec = Math.floor(now / 1000);
+    const ttl = config.cookie.accessTtlSeconds;
+    let roster; // read lazily, at most once per tick: only a past-deadline socket needs it
+    let rosterErr;
+    const findUser = (username) => {
+      if (rosterErr) throw rosterErr;
+      if (roster === undefined) {
+        try {
+          roster = lookupUser();
+        } catch (e) {
+          rosterErr = e;
+          error(`ping sweep roster read failed: ${e.message}`);
+          throw e;
+        }
+      }
+      return roster.find((u) => u.username === username) ?? null;
+    };
     for (const [ws, meta] of sockets) {
-      if (now - meta.lastSeen > STALE_MS) ws.terminate();
-      else if (nowSec > meta.deadline + GRACE_SECONDS) ws.close(4401, 'session expired');
-      else ws.ping();
+      const action = evaluateSocketSafe(meta, now, findUser, ttl);
+      if (action === 'terminate') ws.terminate();
+      else if (action === 'close') ws.close(4401, 'session expired');
+      else if (action === 'ping') ws.ping();
     }
   }, PING_INTERVAL_MS);
 

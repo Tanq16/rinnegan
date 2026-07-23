@@ -30,6 +30,7 @@
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
   const REFRESH_MARGIN_MS = 5 * 60 * 1000;
   const REFRESH_BACKOFF_MS = [10000, 20000, 40000];
+  const STATE_CHECK_MS = 60000; // periodic UX check; the server's slide is the real keep-alive
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
   const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
   const RESIZE_MS = 200;
@@ -90,6 +91,7 @@
   let accessExpiresAt = null;
   let refreshTimer = null;
   let refreshRetry = 0;
+  let recovering = false; // one 4401 recovery attempt per closed socket; guards against reconnect loops
   let grid = { cols: 120, rows: 36 };
   let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
   let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
@@ -131,7 +133,7 @@
     clearInterval(hbTimer);
     hbTimer = null;
     ws = null;
-    if (ev.code === 4401) { cancelRefresh(); location.href = '/login'; return; }
+    if (ev.code === 4401) { recover4401(); return; }
     if (ev.code === 4000) {
       // an admin kick must land at the chooser on Reconnect, never silently rejoin shared
       cancelRefresh();
@@ -151,19 +153,19 @@
     refreshTimer = null;
   }
 
-  // HttpOnly cookie ⇒ the server owns exp; refresh a margin (plus jitter) before it so the renewal always beats the socket deadline.
-  function scheduleRefresh() {
-    cancelRefresh();
+  function checkAccessState() {
     if (typeof accessExpiresAt !== 'number') return;
-    const margin = REFRESH_MARGIN_MS + Math.floor(Math.random() * 30000);
-    const delay = accessExpiresAt * 1000 - Date.now() - margin;
-    if (delay <= 0) { doRefresh(); return; }
-    refreshTimer = setTimeout(doRefresh, delay);
+    if (accessExpiresAt * 1000 - Date.now() <= REFRESH_MARGIN_MS) doRefresh();
+  }
+
+  function resumeRefresh() {
+    refreshRetry = 0;
+    checkAccessState();
   }
 
   async function doRefresh() {
-    cancelRefresh();
     if (typeof accessExpiresAt !== 'number') return;
+    cancelRefresh();
     let res;
     try {
       res = await fetch('/refresh', { method: 'POST' });
@@ -176,23 +178,26 @@
     try { body = await res.json(); } catch { return retryRefresh(); }
     accessExpiresAt = body.accessExpiresAt;
     refreshRetry = 0;
-    scheduleRefresh();
   }
 
+  // Transient-only backoff: a real 401 (doRefresh) is the sole route to /login; exhaustion waits for the next periodic check.
   function retryRefresh() {
-    if (refreshRetry >= REFRESH_BACKOFF_MS.length || Date.now() >= accessExpiresAt * 1000) {
-      location.href = '/login';
-      return;
-    }
+    if (refreshRetry >= REFRESH_BACKOFF_MS.length) { refreshRetry = 0; return; }
     refreshTimer = setTimeout(doRefresh, REFRESH_BACKOFF_MS[refreshRetry++]);
   }
 
-  // If already within the margin, renew now so a following WS reconnect carries a fresh cookie.
-  function resumeRefresh() {
-    if (typeof accessExpiresAt !== 'number') { cancelRefresh(); return; }
-    refreshRetry = 0;
-    if (accessExpiresAt * 1000 - Date.now() <= REFRESH_MARGIN_MS) doRefresh();
-    else scheduleRefresh();
+  async function recover4401() {
+    if (recovering) { location.href = '/login'; return; }
+    recovering = true;
+    let res;
+    try { res = await fetch('/refresh', { method: 'POST' }); }
+    catch { location.href = '/login'; return; }
+    if (res.status !== 200) { location.href = '/login'; return; }
+    let body;
+    try { body = await res.json(); } catch { location.href = '/login'; return; }
+    if (typeof body.accessExpiresAt === 'number') accessExpiresAt = body.accessExpiresAt;
+    lastSess = null; // genuinely gone: reconnect into the lobby, not a silent shared rejoin
+    connect();
   }
 
   function onMessage(ev) {
@@ -274,6 +279,7 @@
     clearTimeout(resizeTimer);
     armReplay(0); // a replay interrupted by the reconnect must stay disarmed
     backoffIdx = 0;
+    recovering = false;
     hideOverlay();
     els.endedBar.hidden = true;
     setStatus('connected');
@@ -865,6 +871,7 @@
 
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resumeRefresh(); });
     window.addEventListener('online', resumeRefresh);
+    setInterval(checkAccessState, STATE_CHECK_MS);
 
     connect();
   }

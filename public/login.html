@@ -26,6 +26,10 @@
     </form>
   </main>
   <script>
+    // Silent resume: a still-valid refresh cookie lands straight in the app, no password.
+    fetch('/refresh', { method: 'POST' }).then((r) => { if (r.ok) location.replace('/'); }).catch(() => {});
+  </script>
+  <script>
     if (new URLSearchParams(location.search).get('error') === '1')
       document.getElementById('login-error').hidden = false;
   </script>

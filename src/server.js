@@ -102,7 +102,7 @@ export function start(cfg, flags = {}) {
 
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
 
-  const terminal = attachWebSocket({ config: cfg, session, control, authenticate, offerShared, authOn });
+  const terminal = attachWebSocket({ config: cfg, session, control, authenticate, offerShared, authOn, lookupUser: () => listUsers(cfg.usersFile) });
 
   const refresh = noAuth
     ? () => ({ accessExpiresAt: null })
