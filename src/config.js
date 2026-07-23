@@ -5,7 +5,7 @@ import os from 'node:os';
 
 const DEFAULTS = {
   listen: { host: '127.0.0.1', port: 8442 },
-  cookie: { secure: false, name: 'rinnegan', ttlSeconds: 86400 },
+  cookie: { secure: false, name: 'rinnegan', accessTtlSeconds: 10800, refreshTtlSeconds: 604800 },
   terminal: {
     shell: '/usr/bin/env zsh -l',
     cwd: null,
@@ -110,9 +110,14 @@ export function loadConfig() {
     Number.isInteger(cfg.buffer.maxBytes) && cfg.buffer.maxBytes >= 65536,
     'buffer.maxBytes must be an integer >= 65536'
   );
+  // Cap it: the refresh setTimeout (~accessTtl*1000 ms) hot-loops /refresh if it exceeds Node's ~24.85-day timer limit and clamps to ~1ms.
   check(
-    Number.isInteger(cfg.cookie.ttlSeconds) && cfg.cookie.ttlSeconds >= 60,
-    'cookie.ttlSeconds must be an integer >= 60'
+    Number.isInteger(cfg.cookie.accessTtlSeconds) && cfg.cookie.accessTtlSeconds >= 60 && cfg.cookie.accessTtlSeconds <= 604800,
+    'cookie.accessTtlSeconds must be an integer between 60 and 604800'
+  );
+  check(
+    Number.isInteger(cfg.cookie.refreshTtlSeconds) && cfg.cookie.refreshTtlSeconds >= 60,
+    'cookie.refreshTtlSeconds must be an integer >= 60'
   );
   // cookie.name lands in a Set-Cookie header; restrict to token chars to prevent header/cookie injection.
   check(

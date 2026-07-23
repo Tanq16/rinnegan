@@ -28,6 +28,8 @@
   };
 
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
+  const REFRESH_MARGIN_MS = 5 * 60 * 1000;
+  const REFRESH_BACKOFF_MS = [10000, 20000, 40000];
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
   const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
   const RESIZE_MS = 200;
@@ -85,6 +87,9 @@
   let me = { username: null, role: null };
   let offerShared = false; // server tier: false ⇒ terminal-only lobby, no shared session or admin panel
   let authOn = true;
+  let accessExpiresAt = null;
+  let refreshTimer = null;
+  let refreshRetry = 0;
   let grid = { cols: 120, rows: 36 };
   let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
   let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
@@ -126,9 +131,10 @@
     clearInterval(hbTimer);
     hbTimer = null;
     ws = null;
-    if (ev.code === 4401) { location.href = '/login'; return; }
+    if (ev.code === 4401) { cancelRefresh(); location.href = '/login'; return; }
     if (ev.code === 4000) {
       // an admin kick must land at the chooser on Reconnect, never silently rejoin shared
+      cancelRefresh();
       lastSess = null;
       setStatus('disconnected');
       showOverlay('Disconnected by admin.');
@@ -138,6 +144,55 @@
     const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
     backoffIdx++;
     reconnectTimer = setTimeout(connect, delay);
+  }
+
+  function cancelRefresh() {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+
+  // HttpOnly cookie ⇒ the server owns exp; refresh a margin (plus jitter) before it so the renewal always beats the socket deadline.
+  function scheduleRefresh() {
+    cancelRefresh();
+    if (typeof accessExpiresAt !== 'number') return;
+    const margin = REFRESH_MARGIN_MS + Math.floor(Math.random() * 30000);
+    const delay = accessExpiresAt * 1000 - Date.now() - margin;
+    if (delay <= 0) { doRefresh(); return; }
+    refreshTimer = setTimeout(doRefresh, delay);
+  }
+
+  async function doRefresh() {
+    cancelRefresh();
+    if (typeof accessExpiresAt !== 'number') return;
+    let res;
+    try {
+      res = await fetch('/refresh', { method: 'POST' });
+    } catch {
+      return retryRefresh();
+    }
+    if (res.status === 401) { location.href = '/login'; return; }
+    if (!res.ok) return retryRefresh();
+    let body;
+    try { body = await res.json(); } catch { return retryRefresh(); }
+    accessExpiresAt = body.accessExpiresAt;
+    refreshRetry = 0;
+    scheduleRefresh();
+  }
+
+  function retryRefresh() {
+    if (refreshRetry >= REFRESH_BACKOFF_MS.length || Date.now() >= accessExpiresAt * 1000) {
+      location.href = '/login';
+      return;
+    }
+    refreshTimer = setTimeout(doRefresh, REFRESH_BACKOFF_MS[refreshRetry++]);
+  }
+
+  // If already within the margin, renew now so a following WS reconnect carries a fresh cookie.
+  function resumeRefresh() {
+    if (typeof accessExpiresAt !== 'number') { cancelRefresh(); return; }
+    refreshRetry = 0;
+    if (accessExpiresAt * 1000 - Date.now() <= REFRESH_MARGIN_MS) doRefresh();
+    else scheduleRefresh();
   }
 
   function onMessage(ev) {
@@ -211,6 +266,7 @@
     me = msg.you;
     offerShared = msg.offerShared === true;
     authOn = msg.authOn === true;
+    accessExpiresAt = typeof msg.accessExpiresAt === 'number' ? msg.accessExpiresAt : null;
     grid = { cols: msg.size.cols, rows: msg.size.rows };
     state = msg.state;
     sess = 'lobby'; // no replay follows hello
@@ -234,6 +290,7 @@
     } else {
       showChooser(null);
     }
+    resumeRefresh();
     renderPanel();
   }
 
@@ -805,6 +862,9 @@
 
     window.addEventListener('resize', onViewportResize);
     document.fonts.ready.then(onViewportResize); // webfont metrics differ from fallback
+
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resumeRefresh(); });
+    window.addEventListener('online', resumeRefresh);
 
     connect();
   }

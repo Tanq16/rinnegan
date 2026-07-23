@@ -3,6 +3,7 @@ import { spawnRawPty } from './pty.js';
 
 const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
+const GRACE_SECONDS = 60;
 
 export function attachWebSocket({ config, session, control, authenticate, offerShared, authOn }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
@@ -302,6 +303,7 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
       username: user.username,
       role: user.role,
       lastSeen: Date.now(),
+      deadline: typeof user.accessExp === 'number' ? user.accessExp : Infinity,
       mode: 'lobby',
       epoch: 0,
       natural: null,
@@ -318,6 +320,7 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
       epoch: meta.epoch,
       offerShared,
       authOn,
+      accessExpiresAt: meta.deadline === Infinity ? null : meta.deadline,
     });
     broadcastState();
 
@@ -350,13 +353,24 @@ export function attachWebSocket({ config, session, control, authenticate, offerS
     wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, user));
   }
 
+  // A refresh slides this user's live sockets forward (never closing an active tab) and re-applies the current role so a demotion lands.
+  function touchUser(username, newExp, newRole) {
+    for (const meta of sockets.values()) {
+      if (meta.username !== username) continue;
+      meta.deadline = newExp;
+      if (newRole !== undefined) meta.role = newRole;
+    }
+  }
+
   setInterval(() => {
     const now = Date.now();
+    const nowSec = Math.floor(now / 1000);
     for (const [ws, meta] of sockets) {
       if (now - meta.lastSeen > STALE_MS) ws.terminate();
+      else if (nowSec > meta.deadline + GRACE_SECONDS) ws.close(4401, 'session expired');
       else ws.ping();
     }
   }, PING_INTERVAL_MS);
 
-  return { handleUpgrade };
+  return { handleUpgrade, touchUser };
 }

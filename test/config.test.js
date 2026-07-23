@@ -31,7 +31,8 @@ test('loadConfig fills defaults from a minimal config', () => {
   assert.equal(cfg.listen.host, '127.0.0.1');
   assert.equal(cfg.cookie.name, 'rinnegan');
   assert.equal(cfg.cookie.secure, false);
-  assert.equal(cfg.cookie.ttlSeconds, 86400);
+  assert.equal(cfg.cookie.accessTtlSeconds, 10800);
+  assert.equal(cfg.cookie.refreshTtlSeconds, 604800);
   assert.equal(cfg.terminal.cols, 120);
   assert.equal(cfg.terminal.env.TERM, 'xterm-256color');
   assert.equal(cfg.control.mode, 'soft');
@@ -58,7 +59,7 @@ test('loadConfig deep-merges nested overrides while keeping sibling defaults', (
   const cfg = loadConfig();
   assert.equal(cfg.cookie.secure, true);
   assert.equal(cfg.cookie.name, 'rinnegan');
-  assert.equal(cfg.cookie.ttlSeconds, 86400);
+  assert.equal(cfg.cookie.accessTtlSeconds, 10800);
 });
 
 test('loadConfig merges a deeply nested object keeping unmentioned keys', () => {
@@ -126,8 +127,12 @@ test('loadConfig validation boundaries', async (t) => {
     { name: 'requestTimeout 0 rejected', over: { control: { requestTimeoutSeconds: 0 } }, err: /requestTimeoutSeconds/ },
     { name: 'maxBytes 65536 ok', over: { buffer: { maxBytes: 65536 } } },
     { name: 'maxBytes 65535 rejected', over: { buffer: { maxBytes: 65535 } }, err: /buffer\.maxBytes/ },
-    { name: 'ttl 60 ok', over: { cookie: { ttlSeconds: 60 } } },
-    { name: 'ttl 59 rejected', over: { cookie: { ttlSeconds: 59 } }, err: /cookie\.ttlSeconds/ },
+    { name: 'access ttl 60 ok', over: { cookie: { accessTtlSeconds: 60 } } },
+    { name: 'access ttl 59 rejected', over: { cookie: { accessTtlSeconds: 59 } }, err: /cookie\.accessTtlSeconds/ },
+    { name: 'access ttl 604800 ok', over: { cookie: { accessTtlSeconds: 604800 } } },
+    { name: 'access ttl 604801 rejected', over: { cookie: { accessTtlSeconds: 604801 } }, err: /cookie\.accessTtlSeconds/ },
+    { name: 'refresh ttl 60 ok', over: { cookie: { refreshTtlSeconds: 60 } } },
+    { name: 'refresh ttl 59 rejected', over: { cookie: { refreshTtlSeconds: 59 } }, err: /cookie\.refreshTtlSeconds/ },
     { name: 'cookie name token ok', over: { cookie: { name: 'good_name-1' } } },
     { name: 'cookie name with space rejected', over: { cookie: { name: 'bad name' } }, err: /cookie\.name/ },
     { name: 'cookie name with semicolon rejected', over: { cookie: { name: 'has;semi' } }, err: /cookie\.name/ },

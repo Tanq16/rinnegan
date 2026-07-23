@@ -3,14 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in — Shared Web Terminal</title>
+  <title>Sign in — Rinnegan</title>
   <link rel="stylesheet" href="/css/inter.css">
   <link rel="stylesheet" href="/css/jetbrains-mono.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="login-page">
   <main class="login-card">
-    <h1>Shared Web Terminal</h1>
+    <div class="login-brand">
+      <img src="/logo.svg" alt="Rinnegan" class="login-logo">
+      <span class="login-wordmark">Rinnegan</span>
+    </div>
     <p class="error" id="login-error" hidden>Invalid username or password.</p>
     <form method="post" action="/login">
       <label>Username

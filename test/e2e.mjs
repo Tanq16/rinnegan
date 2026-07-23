@@ -241,7 +241,7 @@ async function withTierServer({ users, noAuth }, fn) {
   await fs.promises.mkdir(cfgDir, { recursive: true });
   await fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
     listen: { host: '127.0.0.1', port: PORT },
-    cookie: { secure: false, name: 'rinnegan', ttlSeconds: 3600 },
+    cookie: { secure: false, name: 'rinnegan', accessTtlSeconds: 3600, refreshTtlSeconds: 604800 },
     terminal: { shell: '/usr/bin/env sh -l', cwd: home, cols: 120, rows: 36, autoRestartShell: false },
     control: { mode: 'soft', staleControllerSeconds: 5, requestTimeoutSeconds: 30 },
     buffer: { maxBytes: 65536 },
@@ -344,7 +344,7 @@ async function main() {
 
     await fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
       listen: { host: '127.0.0.1', port: PORT },
-      cookie: { secure: false, name: 'rinnegan', ttlSeconds: 3600 },
+      cookie: { secure: false, name: 'rinnegan', accessTtlSeconds: 3600, refreshTtlSeconds: 604800 },
       terminal: { shell: '/usr/bin/env sh -l', cwd: tmp, cols: 120, rows: 36, autoRestartShell: false },
       control: { mode: 'soft', staleControllerSeconds: 5, requestTimeoutSeconds: 30 },
       buffer: { maxBytes: 65536 },
@@ -391,8 +391,8 @@ async function main() {
       assert.equal(getCookiePair(res, 'rinnegan'), null, 'must not set session cookie on bad login');
     });
 
-    let cookieAdmin;
-    await check('POST /login correct sets HttpOnly cookie and redirects to /', async () => {
+    let cookieAdmin, refreshAdmin;
+    await check('POST /login correct sets both HttpOnly cookies and redirects to /', async () => {
       const res = await post('/login', { username: 'tanish', password: ADMIN_PASS });
       assert.equal(res.status, 302);
       assert.equal(res.headers.get('location'), '/');
@@ -401,6 +401,27 @@ async function main() {
       assert.ok(/httponly/i.test(sc), 'cookie must be HttpOnly');
       cookieAdmin = sc.split(';')[0];
       assert.ok(cookieAdmin.length > 'rinnegan='.length, 'cookie value empty');
+      const rt = getCookiePair(res, 'rinnegan_rt');
+      assert.ok(rt, 'missing Set-Cookie for rinnegan_rt');
+      assert.ok(/httponly/i.test(rt), 'refresh cookie must be HttpOnly');
+      assert.ok(/path=\/refresh/i.test(rt), 'refresh cookie must be scoped to /refresh');
+      refreshAdmin = rt.split(';')[0];
+    });
+
+    await check('POST /refresh with the refresh cookie mints a fresh access cookie', async () => {
+      const res = await post('/refresh', {}, refreshAdmin);
+      assert.equal(res.status, 200);
+      const sc = getCookiePair(res, 'rinnegan');
+      assert.ok(sc, '/refresh must set a fresh access cookie');
+      assert.ok(/httponly/i.test(sc), 'refreshed access cookie must be HttpOnly');
+      const json = await res.json();
+      assert.equal(typeof json.accessExpiresAt, 'number', 'refresh response must carry a numeric accessExpiresAt');
+    });
+
+    await check('POST /refresh without the refresh cookie is rejected (401)', async () => {
+      const res = await post('/refresh', {});
+      assert.equal(res.status, 401);
+      assert.equal(getCookiePair(res, 'rinnegan'), null, 'a rejected refresh must not set a cookie');
     });
 
     await check('GET / with cookie serves terminal page', async () => {

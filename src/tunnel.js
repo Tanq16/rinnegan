@@ -13,11 +13,16 @@ export function validatePort(value) {
 export function attachTunnel({ authenticate }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
 
-  function pipe(ws, upstream) {
+  function pipe(ws, upstream, accessExp) {
     let closed = false;
+    // No sliding for tunnels: a reconnect is not destructive, so the client simply reopens on 4401.
+    const expiryTimer = typeof accessExp === 'number'
+      ? setTimeout(() => ws.close(4401, 'session expired'), (accessExp + 60) * 1000 - Date.now())
+      : null;
     const teardown = () => {
       if (closed) return;
       closed = true;
+      if (expiryTimer) clearTimeout(expiryTimer);
       upstream.end(); // not destroy(): it drops buffered bytes and truncates the tail
       ws.close();
     };
@@ -50,7 +55,7 @@ export function attachTunnel({ authenticate }) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4400, 'invalid port'));
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => pipe(ws, connect(port, '127.0.0.1')));
+    wss.handleUpgrade(req, socket, head, (ws) => pipe(ws, connect(port, '127.0.0.1'), user.accessExp));
   }
 
   return { handleUpgrade };
