@@ -23,6 +23,47 @@ export function cookieFromSetCookie(setCookie) {
   return pair.indexOf('=') > 0 ? pair : null;
 }
 
+export function parseMapping(entry) {
+  const fail = () => { throw new Error(`invalid port mapping: ${JSON.stringify(entry)}`); };
+  if (typeof entry === 'number' || (typeof entry === 'string' && !entry.includes(':'))) {
+    const port = validatePort(entry);
+    if (port === null) fail();
+    return { local: port, remote: port };
+  }
+  const pair = typeof entry === 'string' ? entry.split(':')
+    : Array.isArray(entry) ? entry : fail();
+  if (pair.length !== 2) fail();
+  const local = validatePort(pair[0]);
+  const remote = validatePort(pair[1]);
+  if (local === null || remote === null) fail();
+  return { local, remote };
+}
+
+export function parseTunnelConfig(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('tunnel config must be a JSON object');
+  }
+  if (typeof raw.server !== 'string' || raw.server.trim() === '') {
+    throw new Error('tunnel config requires a "server" string');
+  }
+  let url;
+  try { url = new URL(raw.server); }
+  catch { throw new Error(`tunnel config "server" is not a valid URL: ${raw.server}`); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`tunnel config "server" must be an http(s) URL: ${raw.server}`);
+  }
+  if (!Array.isArray(raw.ports) || raw.ports.length === 0) {
+    throw new Error('tunnel config requires a non-empty "ports" array');
+  }
+  const mappings = raw.ports.map(parseMapping);
+  const seen = new Set();
+  for (const { local } of mappings) {
+    if (seen.has(local)) throw new Error(`duplicate local port ${local} in tunnel config`);
+    seen.add(local);
+  }
+  return { server: raw.server, mappings };
+}
+
 function login({ server, username, password, insecure }) {
   return new Promise((resolve, reject) => {
     const url = new URL('/login', server);
@@ -47,68 +88,88 @@ function login({ server, username, password, insecure }) {
   });
 }
 
-export async function runTunnel({ server, localPort, remotePort, username, password, insecure }) {
-  const local = validatePort(localPort);
-  if (local === null) throw new Error(`invalid local port: ${localPort}`);
-  const remote = validatePort(remotePort);
-  if (remote === null) throw new Error(`invalid remote port: ${remotePort}`);
+function pipe(ws, socket, remote, refreshCookie) {
+  let closed = false;
+  const teardown = () => {
+    if (closed) return;
+    closed = true;
+    socket.end(); // not destroy(): it drops buffered bytes and truncates the tail
+    ws.close();
+  };
+  // Hold the client bytes until the ws handshake completes, or the first chunk is sent into a CONNECTING socket and lost.
+  socket.pause();
+  ws.on('open', () => {
+    socket.on('data', (chunk) => {
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(chunk, { binary: true }, () => {
+        if (socket.isPaused() && ws.bufferedAmount <= MAX_BUFFERED_BYTES) socket.resume();
+      });
+      if (ws.bufferedAmount > MAX_BUFFERED_BYTES) socket.pause();
+    });
+    socket.resume();
+  });
+  ws.on('message', (data) => {
+    if (!socket.write(data)) ws.pause();
+  });
+  socket.on('drain', () => ws.resume());
+  ws.on('close', (code) => {
+    if (code === 4401) refreshCookie();
+    else if (code === 4400) error(`server rejected tunnel to port ${remote} (invalid port)`);
+    teardown();
+  });
+  ws.on('error', teardown);
+  socket.on('close', teardown);
+  socket.on('error', teardown);
+}
 
-  const tunnelUrl = `${wsBaseFromServer(server)}/tunnel?port=${remote}`;
-  let cookie = await login({ server, username, password, insecure });
+export async function runTunnels({ server, mappings, username, password, insecure }) {
+  if (!Array.isArray(mappings) || mappings.length === 0) throw new Error('no port mappings to forward');
+  const normalized = mappings.map(({ local, remote }) => {
+    const l = validatePort(local);
+    if (l === null) throw new Error(`invalid local port: ${local}`);
+    const r = validatePort(remote);
+    if (r === null) throw new Error(`invalid remote port: ${remote}`);
+    return { local: l, remote: r };
+  });
 
+  const session = { cookie: await login({ server, username, password, insecure }) };
   let refreshing = null;
   function refreshCookie() {
     if (!refreshing) {
       refreshing = login({ server, username, password, insecure })
-        .then((c) => { cookie = c; info('tunnel session refreshed'); })
+        .then((c) => { session.cookie = c; info('tunnel session refreshed'); })
         .catch((e) => error(`re-login failed: ${e.message}`))
         .finally(() => { refreshing = null; });
     }
     return refreshing;
   }
 
-  function pipe(ws, socket) {
-    let closed = false;
-    const teardown = () => {
-      if (closed) return;
-      closed = true;
-      socket.end(); // not destroy(): it drops buffered bytes and truncates the tail
-      ws.close();
-    };
-    // Hold the client bytes until the ws handshake completes, or the first chunk is sent into a CONNECTING socket and lost.
-    socket.pause();
-    ws.on('open', () => {
-      socket.on('data', (chunk) => {
-        if (ws.readyState !== ws.OPEN) return;
-        ws.send(chunk, { binary: true }, () => {
-          if (socket.isPaused() && ws.bufferedAmount <= MAX_BUFFERED_BYTES) socket.resume();
-        });
-        if (ws.bufferedAmount > MAX_BUFFERED_BYTES) socket.pause();
+  const wsBase = wsBaseFromServer(server);
+  const listeners = [];
+  try {
+    for (const { local, remote } of normalized) {
+      const tunnelUrl = `${wsBase}/tunnel?port=${remote}`;
+      const listener = createServer((socket) => {
+        pipe(new WebSocket(tunnelUrl, { headers: { Cookie: session.cookie }, rejectUnauthorized: !insecure }), socket, remote, refreshCookie);
       });
-      socket.resume();
-    });
-    ws.on('message', (data) => {
-      if (!socket.write(data)) ws.pause();
-    });
-    socket.on('drain', () => ws.resume());
-    ws.on('close', (code) => {
-      if (code === 4401) refreshCookie();
-      else if (code === 4400) error(`server rejected tunnel to port ${remote} (invalid port)`);
-      teardown();
-    });
-    ws.on('error', teardown);
-    socket.on('close', teardown);
-    socket.on('error', teardown);
+      await new Promise((resolve, reject) => {
+        listener.once('error', reject);
+        listener.listen(local, '127.0.0.1', resolve);
+      });
+      info(`forwarding localhost:${local} -> server localhost:${remote} (authenticated as ${username})`);
+      listeners.push(listener);
+    }
+  } catch (e) {
+    for (const l of listeners) l.close(); // a late bind failure must not leak the listeners already open
+    throw e;
   }
+  return listeners;
+}
 
-  const listener = createServer((socket) => {
-    pipe(new WebSocket(tunnelUrl, { headers: { Cookie: cookie }, rejectUnauthorized: !insecure }), socket);
+export async function runTunnel({ server, localPort, remotePort, username, password, insecure }) {
+  const [listener] = await runTunnels({
+    server, username, password, insecure,
+    mappings: [{ local: localPort, remote: remotePort }],
   });
-
-  await new Promise((resolve, reject) => {
-    listener.once('error', reject);
-    listener.listen(local, '127.0.0.1', resolve);
-  });
-  info(`forwarding localhost:${local} -> server localhost:${remote} (authenticated as ${username})`);
   return listener;
 }

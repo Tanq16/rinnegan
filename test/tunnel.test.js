@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { wsBaseFromServer, cookieFromSetCookie, validatePort } from '../src/tunnel-client.js';
+import { wsBaseFromServer, cookieFromSetCookie, validatePort, parseMapping, parseTunnelConfig } from '../src/tunnel-client.js';
 
 test('wsBaseFromServer maps scheme and preserves host/port', async (t) => {
   const cases = [
@@ -54,5 +54,66 @@ test('validatePort accepts 1..65535 integers only', async (t) => {
   ];
   for (const c of cases) {
     await t.test(c.name, () => assert.equal(validatePort(c.in), c.want));
+  }
+});
+
+test('parseMapping normalizes every accepted form and rejects the rest', async (t) => {
+  const cases = [
+    { name: 'colon string', in: '8080:80', want: { local: 8080, remote: 80 } },
+    { name: 'bare string shorthand', in: '3000', want: { local: 3000, remote: 3000 } },
+    { name: 'bare number shorthand', in: 5432, want: { local: 5432, remote: 5432 } },
+    { name: 'two-element array', in: [8080, 80], want: { local: 8080, remote: 80 } },
+    { name: 'array of numeric strings', in: ['22', '2222'], want: { local: 22, remote: 2222 } },
+    { name: 'boundary ports', in: '1:65535', want: { local: 1, remote: 65535 } },
+    { name: 'missing remote', in: '8080:', throws: true },
+    { name: 'missing local', in: ':80', throws: true },
+    { name: 'lone colon', in: ':', throws: true },
+    { name: 'three parts', in: '8080:80:9', throws: true },
+    { name: 'port zero', in: '0:80', throws: true },
+    { name: 'port over range', in: '8080:65536', throws: true },
+    { name: 'non-numeric part', in: 'http:80', throws: true },
+    { name: 'one-element array', in: [8080], throws: true },
+    { name: 'three-element array', in: [1, 2, 3], throws: true },
+    { name: 'bare invalid number', in: 70000, throws: true },
+    { name: 'empty string', in: '', throws: true },
+    { name: 'null', in: null, throws: true },
+    { name: 'object', in: { local: 1 }, throws: true },
+  ];
+  for (const c of cases) {
+    await t.test(c.name, () => {
+      if (c.throws) return assert.throws(() => parseMapping(c.in));
+      assert.deepEqual(parseMapping(c.in), c.want);
+    });
+  }
+});
+
+test('parseTunnelConfig validates shape and reports the bad field', async (t) => {
+  await t.test('valid config normalizes all mappings', () => {
+    assert.deepEqual(
+      parseTunnelConfig({ server: 'https://h:8443', ports: ['8080:80', '3000', [22, 2222]] }),
+      { server: 'https://h:8443', mappings: [
+        { local: 8080, remote: 80 }, { local: 3000, remote: 3000 }, { local: 22, remote: 2222 },
+      ] },
+    );
+  });
+
+  const bad = [
+    { name: 'null', in: null, msg: /JSON object/ },
+    { name: 'array not object', in: ['https://h'], msg: /JSON object/ },
+    { name: 'string not object', in: 'https://h', msg: /JSON object/ },
+    { name: 'missing server', in: { ports: ['80'] }, msg: /"server" string/ },
+    { name: 'empty server', in: { server: '  ', ports: ['80'] }, msg: /"server" string/ },
+    { name: 'non-string server', in: { server: 8443, ports: ['80'] }, msg: /"server" string/ },
+    { name: 'server unparseable', in: { server: 'ht tp://h', ports: ['80'] }, msg: /not a valid URL/ },
+    { name: 'server missing scheme', in: { server: 'example.com:8443', ports: ['80'] }, msg: /http\(s\) URL/ },
+    { name: 'server ws scheme rejected', in: { server: 'ws://h:8443', ports: ['80'] }, msg: /http\(s\) URL/ },
+    { name: 'missing ports', in: { server: 'https://h' }, msg: /"ports" array/ },
+    { name: 'empty ports', in: { server: 'https://h', ports: [] }, msg: /"ports" array/ },
+    { name: 'ports not an array', in: { server: 'https://h', ports: '80' }, msg: /"ports" array/ },
+    { name: 'bad mapping propagates', in: { server: 'https://h', ports: ['8080:bad'] }, msg: /invalid port mapping/ },
+    { name: 'duplicate local port', in: { server: 'https://h', ports: ['8080:80', '8080:81'] }, msg: /duplicate local port 8080/ },
+  ];
+  for (const c of bad) {
+    await t.test(c.name, () => assert.throws(() => parseTunnelConfig(c.in), c.msg));
   }
 });

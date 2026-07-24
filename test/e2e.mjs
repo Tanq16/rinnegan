@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { hashPassword } from '../src/auth.js';
-import { runTunnel } from '../src/tunnel-client.js';
+import { runTunnel, runTunnels } from '../src/tunnel-client.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BIN = path.join(ROOT, 'bin', 'rinnegan.js');
@@ -526,6 +526,40 @@ async function main() {
         sock.destroy();
         listener.close();
         echo.close();
+      }
+    });
+
+    await check('client runTunnels forwards several ports over one login', async () => {
+      const mkEcho = async (tag) => {
+        const echo = net.createServer((s) => s.pipe(s));
+        await new Promise((r) => echo.listen(0, '127.0.0.1', r));
+        return { echo, port: echo.address().port, tag: `E2E_MULTI_${tag}` };
+      };
+      const a = await mkEcho('A');
+      const b = await mkEcho('B');
+      const localA = await freePort();
+      const localB = await freePort();
+      const listeners = await runTunnels({
+        server: base, username: 'tanish', password: ADMIN_PASS, insecure: false,
+        mappings: [{ local: localA, remote: a.port }, { local: localB, remote: b.port }],
+      });
+      const roundTrip = (localPort, tag) => withTimeout(new Promise((resolve, reject) => {
+        const sock = net.connect(localPort, '127.0.0.1');
+        const chunks = [];
+        sock.on('data', (d) => {
+          chunks.push(d);
+          if (Buffer.concat(chunks).includes(tag)) { sock.destroy(); resolve(); }
+        });
+        sock.on('error', reject);
+        sock.on('connect', () => sock.write(tag));
+      }), 5000, `${tag} echo bytes`);
+      try {
+        await Promise.all([roundTrip(localA, a.tag), roundTrip(localB, b.tag)]);
+        assert.equal(listeners.length, 2, 'runTunnels should return one listener per mapping');
+      } finally {
+        for (const l of listeners) l.close();
+        a.echo.close();
+        b.echo.close();
       }
     });
 
