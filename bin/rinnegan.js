@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { addUser, setPassword, listUsers } from '../src/users.js';
 import { start } from '../src/server.js';
-import { runTunnel, validatePort } from '../src/tunnel-client.js';
+import { runTunnel, runTunnels, parseTunnelConfig, validatePort } from '../src/tunnel-client.js';
 
 const USAGE = `usage:
   rinnegan serve [--https] [--no-auth] [--refresh-caddyfile]
@@ -12,6 +12,8 @@ const USAGE = `usage:
   (--refresh-caddyfile overwrites the runtime Caddyfile from the shipped template, discarding local edits)
   rinnegan tunnel --server <url> --local <port> --remote <port> --username <name> [--insecure]
   (forwards localhost:<local> to the server's localhost:<remote> over an authenticated WebSocket)
+  rinnegan tunnel --config <path> --username <name> [--insecure]
+  (forwards every mapping in a JSON config: { "server": <url>, "ports": ["<local>:<remote>", ...] })
   (--insecure skips TLS verification, for the bundled self-signed Caddy cert or a bare IP)
   rinnegan user add --username <name> [--role admin|user]
   rinnegan user passwd --username <name>
@@ -124,15 +126,29 @@ async function userPasswd(flags) {
   await setPassword(cfg.usersFile, username, password);
 }
 
+function loadTunnelConfig(path) {
+  let raw;
+  try { raw = JSON.parse(readFileSync(path, 'utf8')); }
+  catch (e) { throw new Error(`failed to read tunnel config ${path}: ${e.message}`); }
+  return parseTunnelConfig(raw);
+}
+
 async function tunnel(flags) {
-  const server = requireFlag(flags, 'server');
   const username = requireFlag(flags, 'username');
+  const insecure = flags.insecure === true;
+  if (flags.config) {
+    const { server, mappings } = loadTunnelConfig(flags.config);
+    const password = await promptPassword(`Password for ${username}: `);
+    await runTunnels({ server, mappings, username, password, insecure });
+    return;
+  }
+  const server = requireFlag(flags, 'server');
   const localPort = validatePort(requireFlag(flags, 'local'));
   if (localPort === null) throw new Error('--local must be a port 1-65535');
   const remotePort = validatePort(requireFlag(flags, 'remote'));
   if (remotePort === null) throw new Error('--remote must be a port 1-65535');
   const password = await promptPassword(`Password for ${username}: `);
-  await runTunnel({ server, localPort, remotePort, username, password, insecure: flags.insecure === true });
+  await runTunnel({ server, localPort, remotePort, username, password, insecure });
 }
 
 function userList() {

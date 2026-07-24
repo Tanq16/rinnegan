@@ -179,9 +179,16 @@ The launcher forwards its arguments straight to the bundled server:
 ./bin/rinnegan user passwd --username <name>
 ./bin/rinnegan user list
 ./bin/rinnegan tunnel --server <url> --local <port> --remote <port> --username <name> [--insecure]  # forward a local port to the server
+./bin/rinnegan tunnel --config <path> --username <name> [--insecure]  # forward many ports from a JSON config
 ```
 
 `--role` defaults to `user`; password prompts are never echoed. `users.json` is re-read on every login, so `user add`/`user passwd` take effect on a running server without a restart. `serve` refuses to start with zero users unless `--no-auth` is given. `tunnel` forwards your `localhost:<local>` to the server's `localhost:<remote>` over an authenticated WebSocket (password prompted; `--insecure` accepts Caddy's self-signed cert or a bare IP); `--refresh-caddyfile` reseeds the runtime Caddyfile from the bundled template, discarding local edits.
+
+`--config` forwards several ports over one login instead of a single `--local`/`--remote` pair. The file names the server once and lists the mappings (see `tunnel.example.json`); each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"` (same on both sides), or a `[<local>, <remote>]` pair:
+
+```json
+{ "server": "https://example.com:8443", "ports": ["8080:80", "5432:5432", "3000"] }
+```
 
 ### Security
 
