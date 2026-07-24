@@ -688,19 +688,19 @@
     await completeTransfer(r.path);
   }
 
-  async function startFolderUpload(files) {
+  // webkitRelativePath is '' for loose-file and clipboard picks, so rel falls back to the bare name.
+  async function startBatchUpload(files, root) {
     if (transfer) return;
-    const top = files[0].webkitRelativePath.split('/')[0] || 'folder';
     let total = 0;
     for (const f of files) total += f.size;
-    beginTransfer(top + ' — file 1/' + files.length, total);
+    beginTransfer(root + ' — file 1/' + files.length, total);
     const t = transfer;
-    let root;
+    let dest;
     try {
       const res = await fetch('/upload/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: top }),
+        body: JSON.stringify({ name: root }),
       });
       if (!res.ok) throw new Error(await res.text() || 'error (' + res.status + ')');
       const batch = await res.json();
@@ -708,7 +708,7 @@
         if (t.cancelled) throw new Error('aborted');
         const f = files[i];
         const rel = f.webkitRelativePath.split('/').slice(1).join('/') || f.name;
-        t.label = top + ' — file ' + (i + 1) + '/' + files.length;
+        t.label = root + ' — file ' + (i + 1) + '/' + files.length;
         renderProgress(t.done);
         try {
           await xhrUpload('/upload?batch=' + encodeURIComponent(batch.batchId) + '&path=' + encodeURIComponent(rel),
@@ -720,16 +720,16 @@
         t.done += f.size;
         renderProgress(t.done);
       }
-      root = batch.root;
+      dest = batch.root;
     } catch (e) {
       return failTransfer(e);
     }
-    await completeTransfer(root);
+    await completeTransfer(dest);
   }
 
   async function uploadFromClipboard() {
     if (!navigator.clipboard || !navigator.clipboard.read) {
-      return chooserError('clipboard read needs HTTPS — use Choose file…');
+      return chooserError('clipboard read needs HTTPS — use Choose files…');
     }
     let items;
     try {
@@ -737,15 +737,17 @@
     } catch (e) {
       return chooserError('clipboard blocked: ' + (e && e.message || e));
     }
+    const imgs = [];
     for (const item of items) {
       const type = item.types.find((t) => t.startsWith('image/'));
-      if (type) {
-        const blob = await item.getType(type);
-        const ext = (type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
-        return startFileUpload(blob, 'clipboard-image.' + ext);
-      }
+      if (!type) continue;
+      const ext = (type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+      imgs.push({ blob: await item.getType(type), type, ext });
     }
-    chooserError('no image found in the clipboard');
+    if (imgs.length === 0) return chooserError('no image found in the clipboard');
+    if (imgs.length === 1) return startFileUpload(imgs[0].blob, 'clipboard-image.' + imgs[0].ext);
+    const files = imgs.map((im, i) => new File([im.blob], 'clipboard-image-' + (i + 1) + '.' + im.ext, { type: im.type }));
+    return startBatchUpload(files, 'clipboard');
   }
 
   async function startDownload() {
@@ -837,15 +839,16 @@
     els.uploadPick.addEventListener('click', () => els.uploadFile.click());
     els.uploadPickFolder.addEventListener('click', () => els.uploadFolder.click());
     els.uploadFile.addEventListener('change', () => {
-      const f = els.uploadFile.files && els.uploadFile.files[0];
+      const files = Array.from(els.uploadFile.files || []);
       els.uploadFile.value = ''; // allow re-picking the same file
-      if (f) startFileUpload(f, f.name);
+      if (files.length === 1) startFileUpload(files[0], files[0].name);
+      else if (files.length > 1) startBatchUpload(files, 'files');
     });
     els.uploadFolder.addEventListener('change', () => {
       const files = Array.from(els.uploadFolder.files || []);
       els.uploadFolder.value = '';
       if (!files.length) return chooserError('folder is empty (or unreadable)');
-      startFolderUpload(files);
+      startBatchUpload(files, files[0].webkitRelativePath.split('/')[0] || 'folder');
     });
     els.uploadAbort.addEventListener('click', () => {
       if (!transfer) return;
