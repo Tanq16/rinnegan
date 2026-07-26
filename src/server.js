@@ -25,10 +25,11 @@ function startCaddy(root, flags) {
     );
   }
   const caddyfile = resolveCaddyfile(root, flags);
-  return spawn(caddyBin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], {
+  const proc = spawn(caddyBin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], {
     stdio: 'inherit',
     env: { ...process.env, XDG_DATA_HOME: dataDir, XDG_CONFIG_HOME: dataDir },
   });
+  return { proc, caddyfile };
 }
 
 // Runtime Caddyfile lives under configDir() so it survives the updater wiping the release dir.
@@ -165,7 +166,7 @@ export function start(cfg, flags = {}) {
     }
   }
 
-  // hoisted so an abnormal server exit tears Caddy down instead of orphaning the public :8443 listener
+  // hoisted so an abnormal server exit tears Caddy down instead of orphaning the public listener
   let caddy;
   server.on('error', (e) => {
     error(`server error: ${e.message}`);
@@ -180,9 +181,12 @@ export function start(cfg, flags = {}) {
   server.listen(cfg.listen.port, cfg.listen.host, () => {
     info(`rinnegan listening on http://${cfg.listen.host}:${server.address().port}`);
     if (https) {
-      try { caddy = startCaddy(process.env.RINNEGAN_ROOT || null, flags); }
+      let started;
+      try { started = startCaddy(process.env.RINNEGAN_ROOT || null, flags); }
       catch (e) { error(e.message); process.exit(1); }
-      info('rinnegan HTTPS front (Caddy) starting on https://0.0.0.0:8443 (self-signed)');
+      caddy = started.proc;
+      // Naming the file rather than an address: the listeners and issuer are the Caddyfile's to define, and Caddy logs them itself.
+      info(`rinnegan HTTPS front (Caddy) starting with ${started.caddyfile}`);
       caddy.on('exit', (code, sig) => { error(`caddy exited (code=${code} signal=${sig}); shutting down`); process.exit(code == null ? 1 : code); });
       caddy.on('error', (e) => { error(`failed to start caddy: ${e.message}`); process.exit(1); });
     }

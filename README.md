@@ -234,11 +234,21 @@ The first uses the **TLS-ALPN-01** challenge: Let's Encrypt connects back to por
 
 Both samples deliberately omit `default_sni` and any host-less site block, so a request to the server's bare IP sends no SNI, matches no certificate, and dies at the TLS handshake instead of offering something to click through. Each file's header comments carry the domain-side steps (A record, firewall, parking records) and the matching rinnegan settings.
 
-Neither sample is ever auto-seeded — `~/.config/rinnegan/Caddyfile` stays the self-signed template — so point Caddy at one explicitly:
+Neither sample is ever auto-seeded — `~/.config/rinnegan/Caddyfile` stays the self-signed template — so edit a copy (the domain and the `email`) and run it one of three ways:
 
 ```sh
-./bin/rinnegan serve                                 # localhost-only; set cookie.secure: true in config.json
-./bin/caddy run --config ./Caddyfile.domain.example  # or keep it managed: serve --https --caddyfile <path>
+# 1. Two processes. Needs cookie.secure: true in config.json.
+./bin/rinnegan serve
+./bin/caddy run --config ./Caddyfile.domain.example
+
+# 2. Managed child, explicit path.
+./bin/rinnegan serve --https --caddyfile ~/.config/rinnegan/Caddyfile.domain
+
+# 3. Managed child, no flag: install it as the runtime Caddyfile and plain --https loads it.
+cp Caddyfile.domain.example ~/.config/rinnegan/Caddyfile
+./bin/rinnegan serve --https
 ```
 
-Binding `:443` as rinnegan's non-root child needs `setcap cap_net_bind_service=+ep` on `bin/caddy`; running Caddy as its own systemd service avoids that. Set `cookie.secure: true` in `config.json` whenever TLS is terminated this way — only `serve --https` forces it for you.
+`serve --https` prints the Caddyfile it resolved, so you can confirm which one is live. It forces `cookie.secure` regardless of the file loaded; set that manually only on the two-process route. Option 3 is the least typing, but the runtime copy is exactly what `--refresh-caddyfile` overwrites — pass that flag again and you silently drop back to the self-signed template on `:8443`. Option 2 is immune.
+
+Binding `:443` as rinnegan's non-root child needs `setcap cap_net_bind_service=+ep` on `bin/caddy`. **`./update.sh` replaces that binary, which drops the capability — re-apply it after every update**, or Caddy fails to bind and the server exits. Running Caddy as its own systemd service avoids both concerns.
