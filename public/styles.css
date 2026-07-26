@@ -136,6 +136,7 @@ body.readonly #terminal { opacity: .78; filter: grayscale(.35); }
 #p-status[data-state="connected"] { color: var(--green); }
 #p-status[data-state="connecting"],
 #p-status[data-state="reconnecting"] { color: var(--yellow); }
+#p-status[data-state="stale"] { color: var(--peach); }
 #p-status[data-state="disconnected"] { color: var(--red); }
 
 .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
