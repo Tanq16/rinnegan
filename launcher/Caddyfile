@@ -4,6 +4,12 @@
 	auto_https disable_redirects
 	skip_install_trust
 	default_sni localhost
+	# A leaf may not outlive its issuer: at the 7-day default, Caddy silently clamps the 30-day lifetime below.
+	pki {
+		ca local {
+			intermediate_lifetime 8760h
+		}
+	}
 	# No read_body timeout and no request_body cap: file uploads are unbounded and stream for as long as they need.
 	servers {
 		timeouts {
@@ -12,10 +18,8 @@
 	}
 }
 
-# Two addresses: `https://localhost:8443` gives `tls internal` a subject to mint a cert; host-less `https://:8443` routes IP-literal Host headers (e.g. 127.0.0.1) to the proxy.
-https://localhost:8443, https://:8443 {
+(proxy) {
 	bind 0.0.0.0 ::
-	tls internal
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
@@ -23,4 +27,20 @@ https://localhost:8443, https://:8443 {
 		-Server
 	}
 	reverse_proxy 127.0.0.1:8442
+}
+
+# Named so the automation policy carries `localhost` as its subject: a subject-less policy accepts `lifetime` and then ignores it.
+https://localhost:8443 {
+	import proxy
+	# Browsers pin the click-through exception to the leaf's fingerprint, so the 12h default re-raises the warning twice a day.
+	tls {
+		issuer internal {
+			lifetime 720h
+		}
+	}
+}
+
+# Host-less: routes IP-literal Host headers (e.g. 127.0.0.1), served the cert above via default_sni.
+https://:8443 {
+	import proxy
 }

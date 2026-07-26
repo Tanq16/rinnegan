@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveCaddyfile } from '../src/server.js';
+
+const TEMPLATE = fileURLToPath(new URL('../launcher/Caddyfile', import.meta.url));
+const HOURS = { h: 1, d: 24 };
+const toHours = (v) => Number(v.slice(0, -1)) * HOURS[v.slice(-1)];
 
 let home, prevHome, configDir, runtime;
 before(() => {
@@ -24,6 +29,31 @@ function makeRoot(template) {
   if (template !== null) writeFileSync(path.join(root, 'Caddyfile'), template);
   return root;
 }
+
+test('bundled Caddyfile template', async (t) => {
+  const template = readFileSync(TEMPLATE, 'utf8');
+
+  await t.test('pins an explicit internal leaf lifetime on a named site block', () => {
+    const leaf = template.match(/issuer internal \{\s*lifetime (\d+[hd])/);
+    assert.notEqual(leaf, null, 'the internal issuer must pin a lifetime, not inherit the 12h default');
+    assert.ok(toHours(leaf[1]) >= 168, `a leaf under a week still rotates often: got ${leaf[1]}`);
+    assert.match(
+      template,
+      /https:\/\/localhost:8443 \{/,
+      'the lifetime is only honored by a policy with a subject; a host-less block alone silently drops it'
+    );
+  });
+
+  await t.test('keeps the intermediate longer than the leaf so the leaf is not clamped', () => {
+    const leaf = template.match(/issuer internal \{\s*lifetime (\d+[hd])/)[1];
+    const intermediate = template.match(/intermediate_lifetime (\d+[hd])/);
+    assert.notEqual(intermediate, null, 'a leaf past the 7d default intermediate needs intermediate_lifetime raised');
+    assert.ok(
+      toHours(intermediate[1]) >= toHours(leaf),
+      `intermediate ${intermediate[1]} must outlast leaf ${leaf} or Caddy clamps the leaf`
+    );
+  });
+});
 
 test('resolveCaddyfile returns an explicit --caddyfile that exists', () => {
   rmSync(runtime, { force: true });

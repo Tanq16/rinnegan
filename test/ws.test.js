@@ -85,6 +85,53 @@ test('evaluateSocket', async (t) => {
   });
 });
 
+// The per-transition tests above pass for either a 12h or a 15h total budget; only the whole sweep pins which.
+test('session fuse', async (t) => {
+  const PING_MS = 25000;
+  const GRACE = 60;
+  const drive = (meta, fromMs, forHours) => {
+    const slides = [];
+    for (let d = 0; d <= forHours * 3600 * 1000; d += PING_MS) {
+      const now = fromMs + d;
+      meta.lastSeen = now; // protocol pongs keep liveness fresh; the deadline alone is under test
+      const action = evaluateSocket(meta, now, present, TTL);
+      if (action === 'slide') slides.push(Math.floor(now / 1000));
+      if (action === 'close') return { slides, closedAt: Math.floor(now / 1000) };
+    }
+    return { slides, closedAt: null };
+  };
+
+  await t.test('an unrefreshed socket closes 4 slides after its deadline, not at the 12h ceiling', () => {
+    const d0 = nowSec + TTL;
+    const meta = makeMeta({ deadline: d0, missedRefreshes: 0 });
+    const { slides, closedAt } = drive(meta, NOW, 20);
+
+    assert.equal(slides.length, 4, 'the budget is exactly MAX_MISSED_REFRESHES slides');
+    assert.equal(meta.deadline, d0 + 4 * TTL, 'every slide must have advanced the deadline by one TTL');
+    assert.notEqual(closedAt, null, 'the fuse must actually burn out within 20h');
+    const want = d0 + 4 * TTL + GRACE;
+    assert.ok(
+      closedAt >= want && closedAt < want + PING_MS / 1000,
+      `close must land at the grace edge of the last slide: got ${closedAt - nowSec}s after connect, want ~${want - nowSec}s`
+    );
+    assert.equal(want - nowSec, 15 * 3600 + GRACE, 'total budget is 15h01m from connect, not the 12h of slide headroom');
+  });
+
+  await t.test('a refresh mid-fuse restores the full budget, so a live client never reaches the close', () => {
+    const d0 = nowSec + TTL;
+    const meta = makeMeta({ deadline: d0, missedRefreshes: 0 });
+    drive(meta, NOW, 8);
+    assert.ok(meta.missedRefreshes > 0, 'the socket must have burned budget before the refresh lands');
+
+    const refreshedAtSec = nowSec + 8 * 3600;
+    refreshMeta(meta, refreshedAtSec + TTL, 'user');
+    assert.equal(meta.missedRefreshes, 0);
+
+    const { closedAt } = drive(meta, refreshedAtSec * 1000, 14);
+    assert.equal(closedAt, null, 'a refreshed socket must survive another 14h');
+  });
+});
+
 test('refreshMeta', async (t) => {
   await t.test('resets the counter and sets the deadline and role', () => {
     const meta = { deadline: 1, missedRefreshes: 3, role: 'user' };

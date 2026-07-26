@@ -30,6 +30,7 @@
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
   const REFRESH_MARGIN_MS = 5 * 60 * 1000;
   const REFRESH_BACKOFF_MS = [10000, 20000, 40000];
+  const REFRESH_TIMEOUT_MS = 10000; // a hung /refresh must not strand the socket with no reconnect pending
   const STATE_CHECK_MS = 60000; // periodic UX check; the server's slide is the real keep-alive
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
   const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
@@ -91,7 +92,8 @@
   let accessExpiresAt = null;
   let refreshTimer = null;
   let refreshRetry = 0;
-  let recovering = false; // one 4401 recovery attempt per closed socket; guards against reconnect loops
+  let recovering = false; // a refresh was already tried for this socket; a second 4401 backs off instead of retrying it
+  let refreshStale = false; // /refresh has stopped landing: the socket still works but the session is on borrowed time
   let grid = { cols: 120, rows: 36 };
   let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
   let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
@@ -133,7 +135,7 @@
     clearInterval(hbTimer);
     hbTimer = null;
     ws = null;
-    if (ev.code === 4401) { recover4401(); return; }
+    if (ev.code === 4401) { setStatus('reconnecting'); recover4401(); return; }
     if (ev.code === 4000) {
       // an admin kick must land at the chooser on Reconnect, never silently rejoin shared
       cancelRefresh();
@@ -142,10 +144,21 @@
       showOverlay('Disconnected by admin.');
       return;
     }
+    retryConnect();
+  }
+
+  // Clearing `recovering` is load-bearing: it lets the next 4401 retry the refresh, paced by the backoff.
+  function retryConnect() {
+    recovering = false;
     setStatus('reconnecting');
-    const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
-    backoffIdx++;
-    reconnectTimer = setTimeout(connect, delay);
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, BACKOFF_MS[Math.min(backoffIdx++, BACKOFF_MS.length - 1)]);
+  }
+
+  // POST /logout, not /login: while the access cookie is still live, GET /login 302s back to / in a reload loop.
+  function forceLogin() {
+    cancelRefresh();
+    els.logoutForm.submit();
   }
 
   function cancelRefresh() {
@@ -160,6 +173,7 @@
 
   function resumeRefresh() {
     refreshRetry = 0;
+    if (refreshStale) return doRefresh(); // the margin check would skip it, and a stale session needs re-proving now
     checkAccessState();
   }
 
@@ -168,34 +182,44 @@
     cancelRefresh();
     let res;
     try {
-      res = await fetch('/refresh', { method: 'POST' });
+      res = await fetch('/refresh', { method: 'POST', signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) });
     } catch {
       return retryRefresh();
     }
-    if (res.status === 401) { location.href = '/login'; return; }
+    if (res.status === 401) { forceLogin(); return; }
     if (!res.ok) return retryRefresh();
     let body;
     try { body = await res.json(); } catch { return retryRefresh(); }
     accessExpiresAt = body.accessExpiresAt;
     refreshRetry = 0;
+    if (refreshStale) {
+      refreshStale = false;
+      setStatus(ws && ws.readyState === WebSocket.OPEN ? 'connected' : 'reconnecting');
+    }
   }
 
-  // Transient-only backoff: a real 401 (doRefresh) is the sole route to /login; exhaustion waits for the next periodic check.
   function retryRefresh() {
-    if (refreshRetry >= REFRESH_BACKOFF_MS.length) { refreshRetry = 0; return; }
+    if (refreshRetry >= REFRESH_BACKOFF_MS.length) {
+      refreshRetry = 0;
+      refreshStale = true;
+      setStatus('stale');
+      return;
+    }
     refreshTimer = setTimeout(doRefresh, REFRESH_BACKOFF_MS[refreshRetry++]);
   }
 
+  // Only a 401 proves the session is gone; any other outcome is a transport failure and must reconnect, not log out.
   async function recover4401() {
-    if (recovering) { location.href = '/login'; return; }
+    if (recovering) return retryConnect();
     recovering = true;
     let res;
-    try { res = await fetch('/refresh', { method: 'POST' }); }
-    catch { location.href = '/login'; return; }
-    if (res.status !== 200) { location.href = '/login'; return; }
-    let body;
-    try { body = await res.json(); } catch { location.href = '/login'; return; }
-    if (typeof body.accessExpiresAt === 'number') accessExpiresAt = body.accessExpiresAt;
+    try { res = await fetch('/refresh', { method: 'POST', signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) }); }
+    catch { return retryConnect(); }
+    if (res.status === 401) { forceLogin(); return; }
+    let body = null;
+    try { body = await res.json(); } catch {}
+    if (!res.ok || typeof body?.accessExpiresAt !== 'number') return retryConnect();
+    accessExpiresAt = body.accessExpiresAt;
     lastSess = null; // genuinely gone: reconnect into the lobby, not a silent shared rejoin
     connect();
   }
