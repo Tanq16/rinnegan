@@ -1,0 +1,56 @@
+# Real-domain HTTPS behind a wildcard certificate, serving rinnegan at term.example.com.
+# Use this instead of Caddyfile.domain.example when you want the `term` label kept out of Certificate Transparency logs, when you serve several subdomains, or when the box is not publicly reachable on 443 and so cannot answer the credential-free challenge.
+# The cost is credentials: a wildcard is only issuable via DNS-01, so Caddy needs API access to write a TXT record in your zone. bin/caddy ships with cloudflare, porkbun, namecheap, godaddy, duckdns, and acmedns baked in; `./bin/caddy list-modules | grep dns.providers` confirms. For any other host, rebuild with xcaddy or use acmedns, which works everywhere via one permanent CNAME.
+# Pick the module for whoever HOSTS your DNS, not who sold you the domain — check with `dig NS example.com +short`. Each module's credential fields are documented at https://github.com/caddy-dns.
+#
+# Domain side, once:
+#   1. A record  term.example.com -> this server's public IP. A wildcard *certificate* is not wildcard *DNS*; every subdomain you serve still needs its own record.
+#   2. An API token with DNS-edit rights on the zone, exported where Caddy runs (systemd EnvironmentFile, mode 0600 root-only). You never create the _acme-challenge record yourself — Caddy writes it, proves ownership, and deletes it.
+#   3. Open 443/tcp inbound, plus 443/udp for HTTP/3. Port 80 is unused.
+#   4. Delete the registrar's parking records — new domains usually ship an apex ALIAS and a '*' CNAME to a placeholder page, and those fight your own records.
+#
+# rinnegan side:
+#   ./bin/rinnegan serve                        # stays bound to 127.0.0.1:8442
+#   config.json: {"cookie": {"secure": true}}   # only `serve --https` forces this for you
+#   ./bin/caddy run --config ./Caddyfile.wildcard.example
+# Or keep Caddy as rinnegan's managed child with `serve --https --caddyfile <path>`; binding :443 as a non-root child needs `setcap cap_net_bind_service=+ep` on bin/caddy.
+
+{
+	email you@example.com
+	admin off
+	# DNS-01 needs no HTTP challenge; open 80 and drop this line if you want http:// -> https:// redirects.
+	auto_https disable_redirects
+	# No default_sni and no host-less site block, deliberately: a request to the bare IP sends no SNI, matches no certificate, and dies at the TLS handshake.
+	# No read_body timeout and no request_body cap: file uploads are unbounded and stream for as long as they need.
+	servers {
+		timeouts {
+			read_header 10s
+		}
+	}
+}
+
+# One label only, so the apex example.com is NOT covered — give it its own site block if you serve it.
+*.example.com {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		# A split-horizon LAN resolver answers the propagation check with its own rewrite instead of the challenge TXT, and issuance hangs.
+		resolvers 1.1.1.1
+	}
+
+	@term host term.example.com
+	handle @term {
+		header {
+			X-Content-Type-Options nosniff
+			X-Frame-Options DENY
+			Referrer-Policy no-referrer
+			X-Robots-Tag noindex
+			-Server
+		}
+		reverse_proxy 127.0.0.1:8442
+	}
+
+	# Anything else resolving here is dropped rather than 404'd, which would confirm a server is listening.
+	handle {
+		abort
+	}
+}
