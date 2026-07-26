@@ -209,7 +209,7 @@ Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bou
 ./bin/rinnegan serve --https
 ```
 
-Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LICENSE`). This runs Caddy as a **managed child process** listening on `0.0.0.0:8443` and reverse-proxying to `127.0.0.1:8442`, so rinnegan itself stays localhost-only. Browse to **https://\<host\>:8443**, accept the one-time self-signed warning, and log in. `cookie.secure` is forced to `true` in this mode.
+Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LICENSE`), built with `xcaddy` so it also carries the DNS provider modules listed in `licenses/caddy-dns-modules.txt` — those matter only for [your own domain](#bring-your-own-domain) and change nothing here. This runs Caddy as a **managed child process** listening on `0.0.0.0:8443` and reverse-proxying to `127.0.0.1:8442`, so rinnegan itself stays localhost-only. Browse to **https://\<host\>:8443**, accept the one-time self-signed warning, and log in. `cookie.secure` is forced to `true` in this mode.
 
 - **Certificate:** issued by Caddy's internal CA, so browsers warn once per client; removing the warning means installing the CA on every client (out of scope).
 - **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/`, and its config is the runtime `~/.config/rinnegan/Caddyfile` (seeded from the bundled template on the first `--https` run, never clobbered after); delete `caddy-data/` and restart to regenerate the CA.
@@ -221,12 +221,24 @@ rinnegan and Caddy can also run as two separate processes: `./bin/rinnegan serve
 
 #### Bring your own domain
 
-The bundled `--https` path is self-signed. For a public domain with a real, browser-trusted certificate, run rinnegan localhost-only and put your own Caddy in front:
+The bundled `--https` path is self-signed. For a public domain with a real, browser-trusted certificate, run rinnegan localhost-only and put Caddy in front. Two ready-to-edit samples ship in every tarball — replace `example.com`, keep the rest:
 
-```caddyfile
-terminal.example.com {
-  reverse_proxy 127.0.0.1:8442
-}
+| File | Certificate covers | Credentials | Use when |
+| ---- | ------------------ | ----------- | -------- |
+| `Caddyfile.domain.example` | exactly `term.example.com` | **none** | the box is publicly reachable on `:443` — the common case |
+| `Caddyfile.wildcard.example` | `*.example.com` | DNS API token | you want the subdomain label kept out of Certificate Transparency logs, you serve several names, or the box is behind NAT |
+
+The first uses the **TLS-ALPN-01** challenge: Let's Encrypt connects back to port 443 to verify the name, so there is no API token, no `_acme-challenge` record, and nothing to install. The second needs **DNS-01** because a wildcard can only be issued that way — Caddy writes a TXT record in your zone, which requires API access to whoever *hosts* your DNS (not whoever you bought the domain from; check with `dig NS example.com +short`).
+
+`bin/caddy` is built with `xcaddy` and carries these DNS provider modules: **cloudflare, porkbun, namecheap, godaddy, duckdns, acmedns** (`./bin/caddy list-modules | grep dns.providers` to confirm; pinned versions are listed in `licenses/caddy-dns-modules.txt`). For any other DNS host, `acmedns` works universally — register once, add one permanent CNAME, and a token that could rewrite your real zone never lands on the box.
+
+Both samples deliberately omit `default_sni` and any host-less site block, so a request to the server's bare IP sends no SNI, matches no certificate, and dies at the TLS handshake instead of offering something to click through. Each file's header comments carry the domain-side steps (A record, firewall, parking records) and the matching rinnegan settings.
+
+Neither sample is ever auto-seeded — `~/.config/rinnegan/Caddyfile` stays the self-signed template — so point Caddy at one explicitly:
+
+```sh
+./bin/rinnegan serve                                 # localhost-only; set cookie.secure: true in config.json
+./bin/caddy run --config ./Caddyfile.domain.example  # or keep it managed: serve --https --caddyfile <path>
 ```
 
-Set `cookie.secure: true` in `config.json` when behind HTTPS this way.
+Binding `:443` as rinnegan's non-root child needs `setcap cap_net_bind_service=+ep` on `bin/caddy`; running Caddy as its own systemd service avoids that. Set `cookie.secure: true` in `config.json` whenever TLS is terminated this way — only `serve --https` forces it for you.
