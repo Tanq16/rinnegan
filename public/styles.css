@@ -135,7 +135,7 @@ button.danger { color: var(--err); border-color: var(--err); }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px; /* keep computeNatural's avail = clientWidth/Height - 16 in sync */
+  padding: 4px; /* keep computeNatural's avail = clientWidth/Height - 8 in sync */
   /* seamless: same color as terminal bg so the sub-grid remainder reads as padding, not a letterbox border */
   background: var(--bg);
 }
