@@ -99,11 +99,11 @@
   --border: #565f89; --fg: #c0caf5; --fg-muted: #737aa2;
   --accent: #bb9af7; --accent-soft: #7aa2f7; --on-accent: #1a1b26; --scrim: rgba(16, 16, 20, .85);
   --ok: #9ece6a; --warn: #e0af68; --alert: #ff9e64; --err: #f7768e; --info: #7aa2f7;
-  --cursor: #c0caf5; --selection: #33467c; --on-selection: #c0caf5;
+  --cursor: #c0caf5; --selection: #283457; --on-selection: #c0caf5;
   --black: #15161e; --red: #f7768e; --green: #9ece6a; --yellow: #e0af68;
   --blue: #7aa2f7; --magenta: #bb9af7; --cyan: #7dcfff; --white: #a9b1d6;
-  --bright-black: #414868; --bright-red: #f7768e; --bright-green: #9ece6a; --bright-yellow: #e0af68;
-  --bright-blue: #7aa2f7; --bright-magenta: #bb9af7; --bright-cyan: #7dcfff; --bright-white: #c0caf5;
+  --bright-black: #414868; --bright-red: #ff899d; --bright-green: #9fe044; --bright-yellow: #faba4a;
+  --bright-blue: #8db0ff; --bright-magenta: #c7a9ff; --bright-cyan: #a4daff; --bright-white: #c0caf5;
 }
 
 * { box-sizing: border-box; }
@@ -358,11 +358,11 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   background: none;
   border: none;
   padding: 0 2px;
-  color: var(--fg-muted);
+  /* --fg-muted is calibrated against --surface; this sits on --raised, the lightest neutral, where it drops under 2:1 in the darker themes. */
+  color: var(--fg);
   font-size: 16px;
   line-height: 1;
 }
-#transfer-notice-close:hover { color: var(--fg); }
 
 #toast {
   position: fixed;

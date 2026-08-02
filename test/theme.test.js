@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const CSS = readFileSync(fileURLToPath(new URL('../public/styles.css', import.meta.url)), 'utf8');
-const HTML = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+const read = (f) => readFileSync(fileURLToPath(new URL('../public/' + f, import.meta.url)), 'utf8');
+const CSS = read('styles.css');
+const HTML = read('index.html');
+const LOGIN = read('login.html');
+const APP = read('app.js');
 
 const DEFAULT_THEME = 'mocha';
 // The tokens public/app.js reads out of the computed style to build the xterm palette; a missing one reaches xterm as ''.
@@ -58,5 +61,17 @@ test('theme palettes', async (t) => {
 
   await t.test('the control panel offers exactly the themes that exist', () => {
     assert.deepEqual([...options].sort(), [...themes.keys()].sort());
+  });
+
+  // app.js and the two inline bootstraps each carry their own copy of the key and the default; a divergence silently drops the stored theme on every reload.
+  await t.test('the storage key and default theme agree across app.js and both bootstraps', () => {
+    const key = APP.match(/const THEME_KEY = '([^']+)'/)?.[1];
+    const fallback = APP.match(/const DEFAULT_THEME = '([^']+)'/)?.[1];
+    assert.ok(key && fallback, 'app.js must declare THEME_KEY and DEFAULT_THEME');
+    assert.ok(themes.has(fallback), `DEFAULT_THEME is ${fallback}, which has no theme block`);
+    const bootstrap = new RegExp(`getItem\\('${key.replace(/\./g, '\\.')}'\\)\\s*\\|\\|\\s*'${fallback}'`);
+    for (const [name, src] of [['index.html', HTML], ['login.html', LOGIN]]) {
+      assert.match(src, bootstrap, `the ${name} bootstrap does not read '${key}' with a '${fallback}' fallback`);
+    }
   });
 });

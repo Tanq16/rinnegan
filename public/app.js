@@ -646,7 +646,11 @@
     });
 
     els.theme.value = document.documentElement.dataset.theme;
-    if (!els.theme.value) applyTheme(DEFAULT_THEME); // assigning an unknown name leaves the select blank, so a dropped theme has to fall back
+    if (!els.theme.value) {
+      // An unknown stored name deselects every option, so the control needs pointing at the theme the fallback actually applies.
+      els.theme.value = DEFAULT_THEME;
+      applyTheme(DEFAULT_THEME);
+    }
     els.theme.addEventListener('change', () => applyTheme(els.theme.value));
 
     els.uploadOpen.addEventListener('click', openUploadModal);
