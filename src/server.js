@@ -1,13 +1,12 @@
 import path from 'node:path';
+import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadState, saveState, configDir, atomicWriteFileSync } from './config.js';
+import { configDir, atomicWriteFileSync, resolveShell } from './config.js';
 import { parseCookies, verifySession, signSession, serializeCookie } from './auth.js';
-import { verifyLogin, listUsers } from './users.js';
-import { createPtySession } from './pty.js';
-import { createControl } from './control.js';
+import { loadRecord, verify, fingerprint } from './password.js';
 import { createHttpServer } from './http.js';
 import { attachWebSocket } from './ws.js';
 import { attachTunnel } from './tunnel.js';
@@ -54,56 +53,55 @@ export function resolveCaddyfile(root, flags) {
   return runtime;
 }
 
+// os.userInfo() throws when the running uid has no passwd entry, which is common in containers.
+function osUser() {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return process.env.USER || 'unknown';
+  }
+}
+
 export function start(cfg, flags = {}) {
   const https = flags.https === true;
   if (https) cfg.cookie.secure = true;
   if (https && cfg.listen.port !== 8442) process.stderr.write(`warning: --https bundled Caddyfile proxies to 127.0.0.1:8442 but listen.port is ${cfg.listen.port}; edit the Caddyfile to match\n`);
 
+  // !== undefined, not truthiness: `--shell ""` must fail the allowlist, not fall through to the config default.
+  if (flags.shell !== undefined) cfg.terminal.shell = resolveShell(flags.shell);
+
   const noAuth = flags['no-auth'] === true;
   const authOn = !noAuth;
   if (noAuth) process.stderr.write('warning: --no-auth disables authentication; anyone who reaches the port gets a host shell\n');
-  const userCount = authOn ? (existsSync(cfg.usersFile) ? listUsers(cfg.usersFile).length : 0) : 0;
-  if (authOn && userCount === 0) {
-    error('no users configured; create one with `rinnegan user add --username <name>` or start with --no-auth to disable authentication');
+  if (authOn && !existsSync(cfg.authFile)) {
+    error('no password configured; set one with `rinnegan passwd` or start with --no-auth to disable authentication');
     process.exit(1);
   }
-  // A shared session needs at least two accounts to meet in it; a solo or no-auth box is terminal-only.
-  const offerShared = authOn && userCount > 1;
 
-  const state = loadState(cfg.stateFile);
-  // per-boot signing secret: sessions do not survive restarts (spec persists only mode)
+  // per-boot signing secret: sessions do not survive restarts
   const secret = randomBytes(32).toString('base64');
-  const persisted = state.mode;
-  const initialMode = (persisted === 'soft' || persisted === 'fast') ? persisted : cfg.control.mode;
-
-  const control = createControl({
-    mode: initialMode,
-    staleControllerSeconds: cfg.control.staleControllerSeconds,
-    requestTimeoutSeconds: cfg.control.requestTimeoutSeconds,
-    persistMode: (m) => saveState(cfg.stateFile, { mode: m }),
-  });
-
-  const session = createPtySession({
-    shell: cfg.terminal.shell,
-    cwd: cfg.terminal.cwd,
-    cols: cfg.terminal.cols,
-    rows: cfg.terminal.rows,
-    env: cfg.terminal.env,
-    maxBufferBytes: cfg.buffer.maxBytes,
-  });
+  // Replaces the old roster re-check: a password change moves this, so every session minted before it stops refreshing.
+  const currentFingerprint = noAuth ? () => null : () => fingerprint(loadRecord(cfg.authFile), secret);
 
   const refreshCookieName = cfg.cookie.name + '_rt';
 
   const authenticate = noAuth
-    ? () => ({ username: 'nobody', role: 'admin' })
+    ? () => ({ accessExp: null })
     : (req) => {
         const payload = verifySession(parseCookies(req.headers.cookie)[cfg.cookie.name], secret, 'access');
-        return payload ? { username: payload.sub, role: payload.role, accessExp: payload.exp } : null;
+        return payload ? { fp: payload.fp, accessExp: payload.exp } : null;
       };
 
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
 
-  const terminal = attachWebSocket({ config: cfg, session, control, authenticate, offerShared, authOn, lookupUser: () => listUsers(cfg.usersFile) });
+  const host = {
+    hostname: os.hostname(),
+    platform: process.platform,
+    user: osUser(),
+    shell: cfg.terminal.shell,
+  };
+
+  const terminal = attachWebSocket({ config: cfg, authenticate, authOn, host, currentFingerprint });
 
   const refresh = noAuth
     ? () => ({ accessExpiresAt: null })
@@ -111,33 +109,35 @@ export function start(cfg, flags = {}) {
         const token = parseCookies(req.headers.cookie)[refreshCookieName];
         const payload = verifySession(token, secret, 'refresh');
         if (!payload) return null;
-        // Re-check the roster: a deleted user can't refresh forever, and a role change lands within one access-TTL.
-        const cur = listUsers(cfg.usersFile).find((u) => u.username === payload.sub);
-        if (!cur) return null;
+        const fp = currentFingerprint();
+        if (fp !== payload.fp) return null;
         const now = Math.floor(Date.now() / 1000);
         const exp = now + cfg.cookie.accessTtlSeconds;
         const setCookie = serializeCookie(
           cfg.cookie.name,
-          signSession({ sub: cur.username, role: cur.role, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
+          signSession({ fp, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
           { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
         );
-        terminal.touchUser(cur.username, exp, cur.role);
+        terminal.touchAll(exp);
         return { setCookie, accessExpiresAt: exp };
       };
 
   const server = createHttpServer({
     authenticate,
-    login: (username, password) => verifyLogin(cfg.usersFile, username, password),
+    login: async (password) => {
+      const record = await verify(cfg.authFile, password);
+      return record ? fingerprint(record, secret) : null;
+    },
     // Access cookie MUST be first: the CLI tunnel client extracts the first Set-Cookie pair.
-    makeSessionCookie: (user) => [
+    makeSessionCookie: (fp) => [
       serializeCookie(
         cfg.cookie.name,
-        signSession({ sub: user.username, role: user.role, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
+        signSession({ fp, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
         { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
       ),
       serializeCookie(
         refreshCookieName,
-        signSession({ sub: user.username, role: user.role, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
+        signSession({ fp, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
         { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: '/refresh' }
       ),
     ],
@@ -156,15 +156,6 @@ export function start(cfg, flags = {}) {
     if (pathname === '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
     socket.destroy();
   });
-
-  if (offerShared) {
-    try {
-      session.spawn();
-    } catch (e) {
-      error(`failed to spawn shell: ${e.message}`);
-      process.exit(1);
-    }
-  }
 
   // hoisted so an abnormal server exit tears Caddy down instead of orphaning the public listener
   let caddy;

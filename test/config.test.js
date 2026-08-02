@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
-import { loadConfig, loadState, saveState } from '../src/config.js';
+import { loadConfig, resolveShell } from '../src/config.js';
 
 let dir, prevHome, CONFIG_DIR;
 before(() => {
@@ -35,12 +34,9 @@ test('loadConfig fills defaults from a minimal config', () => {
   assert.equal(cfg.cookie.refreshTtlSeconds, 604800);
   assert.equal(cfg.terminal.cols, 120);
   assert.equal(cfg.terminal.env.TERM, 'xterm-256color');
-  assert.equal(cfg.control.mode, 'soft');
-  assert.equal(cfg.buffer.maxBytes, 2097152);
   assert.equal(typeof cfg.terminal.cwd, 'string');
   assert.ok(cfg.terminal.cwd.length > 0);
-  assert.equal(cfg.usersFile, path.join(CONFIG_DIR, 'users.json'));
-  assert.equal(cfg.stateFile, path.join(CONFIG_DIR, 'state.json'));
+  assert.equal(cfg.authFile, path.join(CONFIG_DIR, 'auth.json'));
 });
 
 test('loadConfig seeds a 0600 config.json from defaults when it is missing', () => {
@@ -50,8 +46,7 @@ test('loadConfig seeds a 0600 config.json from defaults when it is missing', () 
   assert.equal(existsSync(configFile()), true);
   assert.equal(statSync(configFile()).mode & 0o777, 0o600);
   assert.equal(cfg.listen.port, 8442);
-  assert.equal(cfg.usersFile, path.join(CONFIG_DIR, 'users.json'));
-  assert.equal(cfg.stateFile, path.join(CONFIG_DIR, 'state.json'));
+  assert.equal(cfg.authFile, path.join(CONFIG_DIR, 'auth.json'));
 });
 
 test('loadConfig deep-merges nested overrides while keeping sibling defaults', () => {
@@ -83,11 +78,10 @@ test('loadConfig keeps an explicit terminal.cwd override', () => {
   assert.equal(cfg.terminal.cwd, '/tmp/somewhere');
 });
 
-test('loadConfig resolves relative users/state paths against the config dir', () => {
-  writeConfig({ usersFile: './creds.json', stateFile: '../shared/state.json' });
+test('loadConfig resolves a relative authFile against the config dir', () => {
+  writeConfig({ authFile: '../shared/creds.json' });
   const cfg = loadConfig();
-  assert.equal(cfg.usersFile, path.resolve(CONFIG_DIR, './creds.json'));
-  assert.equal(cfg.stateFile, path.resolve(CONFIG_DIR, '../shared/state.json'));
+  assert.equal(cfg.authFile, path.resolve(CONFIG_DIR, '../shared/creds.json'));
 });
 
 test('loadConfig ignores a __proto__ key without polluting Object.prototype', () => {
@@ -121,12 +115,6 @@ test('loadConfig validation boundaries', async (t) => {
     { name: 'cols 1 ok', over: { terminal: { cols: 1 } } },
     { name: 'cols 0 rejected', over: { terminal: { cols: 0 } }, err: /terminal\.cols/ },
     { name: 'rows 0 rejected', over: { terminal: { rows: 0 } }, err: /terminal\.rows/ },
-    { name: 'mode fast ok', over: { control: { mode: 'fast' } } },
-    { name: 'mode invalid rejected', over: { control: { mode: 'turbo' } }, err: /control\.mode/ },
-    { name: 'stale 0 rejected', over: { control: { staleControllerSeconds: 0 } }, err: /staleControllerSeconds/ },
-    { name: 'requestTimeout 0 rejected', over: { control: { requestTimeoutSeconds: 0 } }, err: /requestTimeoutSeconds/ },
-    { name: 'maxBytes 65536 ok', over: { buffer: { maxBytes: 65536 } } },
-    { name: 'maxBytes 65535 rejected', over: { buffer: { maxBytes: 65535 } }, err: /buffer\.maxBytes/ },
     { name: 'access ttl 60 ok', over: { cookie: { accessTtlSeconds: 60 } } },
     { name: 'access ttl 59 rejected', over: { cookie: { accessTtlSeconds: 59 } }, err: /cookie\.accessTtlSeconds/ },
     { name: 'access ttl 604800 ok', over: { cookie: { accessTtlSeconds: 604800 } } },
@@ -146,40 +134,23 @@ test('loadConfig validation boundaries', async (t) => {
   }
 });
 
-test('loadState creates a missing state file and returns a null mode', () => {
-  const p = path.join(dir, 'nested', 'state.json');
-  assert.equal(existsSync(p), false);
-  assert.deepEqual(loadState(p), { mode: null });
-  assert.equal(existsSync(p), true);
-});
-
-test('loadState normalizes the mode enum', async (t) => {
+test('resolveShell', async (t) => {
   const cases = [
-    { name: 'fast', raw: '{"mode":"fast"}', want: 'fast' },
-    { name: 'soft', raw: '{"mode":"soft"}', want: 'soft' },
-    { name: 'unknown mode -> null', raw: '{"mode":"bogus"}', want: null },
-    { name: 'missing mode -> null', raw: '{"other":1}', want: null },
-    { name: 'array -> null', raw: '[]', want: null },
-    { name: 'null literal -> null', raw: 'null', want: null },
+    { name: 'zsh', in: 'zsh', want: '/usr/bin/env zsh -l' },
+    { name: 'bash', in: 'bash', want: '/usr/bin/env bash -l' },
+    { name: 'fish', in: 'fish', want: '/usr/bin/env fish -l' },
+    { name: 'unknown name rejected', in: 'bsh', err: /--shell must be one of/ },
+    // `--shell ""` parses to an empty string, and a truthiness check would silently fall through to the default
+    { name: 'empty string rejected', in: '', err: /--shell must be one of/ },
+    { name: 'whitespace rejected', in: ' zsh', err: /--shell must be one of/ },
+    { name: 'a path rejected', in: '/bin/bash', err: /--shell must be one of/ },
+    { name: 'extra args rejected', in: 'bash -c evil', err: /--shell must be one of/ },
+    { name: 'undefined rejected', in: undefined, err: /--shell must be one of/ },
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
-      const p = path.join(dir, `state-${randomBytes(6).toString('hex')}.json`);
-      writeFileSync(p, c.raw);
-      assert.deepEqual(loadState(p), { mode: c.want });
+      if (c.err) assert.throws(() => resolveShell(c.in), c.err);
+      else assert.equal(resolveShell(c.in), c.want);
     });
   }
-});
-
-test('loadState throws on malformed JSON', () => {
-  const p = path.join(dir, `state-bad-${randomBytes(6).toString('hex')}.json`);
-  writeFileSync(p, 'not json');
-  assert.throws(() => loadState(p), /invalid JSON in state file/);
-});
-
-test('saveState round-trips through loadState and writes a 0600 file', () => {
-  const p = path.join(dir, `state-save-${randomBytes(6).toString('hex')}.json`);
-  saveState(p, { mode: 'fast' });
-  assert.deepEqual(loadState(p), { mode: 'fast' });
-  assert.equal(statSync(p).mode & 0o777, 0o600);
 });

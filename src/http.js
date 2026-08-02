@@ -64,8 +64,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return;
     }
     const params = new URLSearchParams(body);
-    const user = await login(params.get('username') ?? '', params.get('password') ?? '');
-    if (user) return redirect(res, '/', makeSessionCookie(user));
+    const session = await login(params.get('password') ?? '');
+    if (session) return redirect(res, '/', makeSessionCookie(session));
     return redirect(res, '/login?error=1');
   }
 
@@ -118,9 +118,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
 
     if (pathname === '/upload') {
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      const user = authenticate(req);
-      if (!user) return unauthorized(res);
-      return handleUpload(req, res, searchParams, user.username);
+      if (!authenticate(req)) return unauthorized(res);
+      return handleUpload(req, res, searchParams);
     }
 
     if (pathname === '/upload/batch') {
@@ -131,9 +130,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
 
     if (pathname === '/download') {
       if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
-      const user = authenticate(req);
-      if (!user) return unauthorized(res);
-      return handleDownload(req, res, searchParams, user.username);
+      if (!authenticate(req)) return unauthorized(res);
+      return handleDownload(req, res, searchParams);
     }
 
     if (pathname === '/styles.css' || pathname === '/app.js' || pathname === '/logo.svg' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {

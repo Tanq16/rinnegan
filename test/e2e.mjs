@@ -9,13 +9,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { hashPassword } from '../src/auth.js';
+import { setPassword } from '../src/password.js';
 import { runTunnel, runTunnels } from '../src/tunnel-client.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BIN = path.join(ROOT, 'bin', 'rinnegan.js');
 const PORT = 0; // 0 = OS-assigned; the real port is parsed from the server's "listening" line
-const ADMIN_PASS = 'e2e-admin-password';
-const USER_PASS = 'e2e-user-password';
+const PASS = 'e2e-password';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -46,7 +46,7 @@ class WSClient {
     this.cursor = 0; // waitText consumes forward-only
     this.bin = [];
     this.binBytes = 0;
-    this.epoch = null; // session epoch from hello/mode; echoed as `e` in input/resize
+    this.epoch = null; // session epoch from hello/started/exited; echoed as `e` in input/resize
     this.closed = null;
     this.waiters = new Set();
     this.ws.on('open', () => this.#notify());
@@ -59,7 +59,7 @@ class WSClient {
         try {
           const m = JSON.parse(data.toString());
           this.texts.push(m);
-          if (m.t === 'hello' || m.t === 'mode') this.epoch = m.epoch;
+          if (m.t === 'hello' || m.t === 'started' || m.t === 'exited') this.epoch = m.epoch;
         } catch { /* ignore unparsable */ }
       }
       this.#notify();
@@ -111,19 +111,7 @@ class WSClient {
     }, ms, what);
   }
 
-  // like waitText but scans the whole history without consuming (order not part of the contract)
-  waitTextAnywhere(pred, ms, what) {
-    return this.#wait(() => {
-      for (const m of this.texts) if (pred(m)) return m;
-      if (this.closed) throw new Error(`socket closed (code ${this.closed.code}) while waiting for ${what}`);
-      return undefined;
-    }, ms, what);
-  }
-
   nextText(ms, what) { return this.waitText(() => true, ms, what); }
-
-  // fast-forward past every already-received text so waitText only sees new ones
-  skipTexts() { this.cursor = this.texts.length; }
 
   waitBinContains(needle, fromByte, ms, what) {
     return this.#wait(() => {
@@ -133,31 +121,11 @@ class WSClient {
     }, ms, what);
   }
 
-  // matches the shared-buffer replay frame by exact `bytes` length, ignoring stray split-pty frames in flight
-  waitReplayFrame(fromIndex, bytes, ms, what) {
-    return this.#wait(() => {
-      for (let i = fromIndex; i < this.bin.length; i++) {
-        if (this.bin[i].length === bytes) return this.bin[i];
-      }
-      if (this.closed) throw new Error(`socket closed (code ${this.closed.code}) while waiting for ${what}`);
-      return undefined;
-    }, ms, what);
-  }
-
-  // attach to shared: reply cols/rows carry the recomputed min-grid; `replay` is set when bufferBytes > 0
-  async attachShared(cols, rows, ms = 8000) {
-    const fromIdx = this.bin.length;
-    const beforeTexts = this.texts.length;
-    this.send({ t: 'shared', cols, rows });
-    const m = await this.waitText((x) => x.t === 'mode' && x.mode === 'shared', ms, 'mode shared reply');
-    assert.ok(Number.isInteger(m.cols) && Number.isInteger(m.rows), 'mode shared must carry cols/rows');
-    assert.ok(Number.isInteger(m.bufferBytes) && m.bufferBytes >= 0, 'mode shared must carry bufferBytes');
-    for (const t of this.texts.slice(beforeTexts)) {
-      if (t.t === 'mode' && t.mode === 'lobby') throw new Error('unexpected lobby hop while attaching to shared');
-    }
-    if (m.bufferBytes > 0) {
-      m.replay = await this.waitReplayFrame(fromIdx, m.bufferBytes, ms, 'shared buffer replay frame');
-    }
+  async start(cols, rows, ms = 8000) {
+    this.send({ t: 'start', cols, rows });
+    const m = await this.waitText((x) => x.t === 'started', ms, 'started reply');
+    assert.ok(Number.isInteger(m.cols) && Number.isInteger(m.rows), 'started must carry cols/rows');
+    assert.ok(Number.isInteger(m.epoch), 'started must carry an epoch');
     return m;
   }
 
@@ -219,49 +187,64 @@ function getCookiePair(res, name) {
   return null;
 }
 
-function assertHelloShape(msg, username, role, { offerShared = true, authOn = true } = {}) {
-  assert.equal(msg.t, 'hello', `first message must be hello, got ${JSON.stringify(msg)}`);
-  assert.ok(msg.you && msg.size && msg.state, 'hello missing you/size/state');
-  assert.equal(msg.you.username, username);
-  assert.equal(msg.you.role, role);
-  assert.ok(Number.isInteger(msg.size.cols) && Number.isInteger(msg.size.rows), 'hello.size cols/rows must be integers');
-  for (const k of ['controller', 'mode', 'viewers', 'pending']) {
-    assert.ok(k in msg.state, `hello.state missing ${k}`);
-  }
-  // buffer is delivered only on shared attach, so hello must carry no bufferBytes
-  assert.ok(!('bufferBytes' in msg), 'hello must not carry bufferBytes');
-  assert.ok(Number.isInteger(msg.epoch), 'hello.epoch must be an integer');
-  assert.equal(msg.offerShared, offerShared, `hello.offerShared must be ${offerShared}`);
-  assert.equal(msg.authOn, authOn, `hello.authOn must be ${authOn}`);
-}
-
-async function withTierServer({ users, noAuth }, fn) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-tier-'));
-  const cfgDir = path.join(home, '.config', 'rinnegan');
-  await fs.promises.mkdir(cfgDir, { recursive: true });
-  await fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
+// `/usr/bin/env sh -l` is deliberately outside the --shell allowlist: config.json stays the arbitrary-command escape hatch.
+function writeServerConfig(cfgDir, cwd, shell = '/usr/bin/env sh -l') {
+  return fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
     listen: { host: '127.0.0.1', port: PORT },
     cookie: { secure: false, name: 'rinnegan', accessTtlSeconds: 3600, refreshTtlSeconds: 604800 },
-    terminal: { shell: '/usr/bin/env sh -l', cwd: home, cols: 120, rows: 36, autoRestartShell: false },
-    control: { mode: 'soft', staleControllerSeconds: 5, requestTimeoutSeconds: 30 },
-    buffer: { maxBytes: 65536 },
+    terminal: { shell, cwd, cols: 120, rows: 36 },
   }, null, 2) + '\n');
-  if (users && users.length) {
-    await fs.promises.writeFile(path.join(cfgDir, 'users.json'),
-      JSON.stringify({ users }, null, 2) + '\n', { mode: 0o600 });
+}
+
+function assertHelloShape(msg, { authOn = true } = {}) {
+  assert.equal(msg.t, 'hello', `first message must be hello, got ${JSON.stringify(msg)}`);
+  assert.ok(Number.isInteger(msg.epoch), 'hello.epoch must be an integer');
+  assert.equal(msg.authOn, authOn, `hello.authOn must be ${authOn}`);
+  assert.ok(msg.host && typeof msg.host === 'object', 'hello must carry host info');
+  assert.equal(typeof msg.host.hostname, 'string', 'host.hostname must be a string');
+  assert.equal(typeof msg.host.platform, 'string', 'host.platform must be a string');
+  assert.equal(typeof msg.host.user, 'string', 'host.user must be a string');
+  assert.ok(typeof msg.host.shell === 'string' && msg.host.shell.length > 0, 'host.shell must name the resolved shell');
+  for (const dead of ['you', 'size', 'state', 'offerShared', 'bufferBytes']) {
+    assert.ok(!(dead in msg), `hello must not carry ${dead}`);
   }
-  const srv = startServer(home, noAuth ? ['--no-auth'] : []);
+  if (authOn) assert.equal(typeof msg.accessExpiresAt, 'number', 'an authenticated hello must carry accessExpiresAt');
+  else assert.equal(msg.accessExpiresAt, null, 'a no-auth hello must carry a null accessExpiresAt');
+}
+
+async function withTempServer({ password, noAuth, shell, args = [] }, fn) {
+  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-tmp-'));
+  const cfgDir = path.join(home, '.config', 'rinnegan');
+  await fs.promises.mkdir(cfgDir, { recursive: true });
+  await writeServerConfig(cfgDir, home, shell);
+  const authFile = path.join(cfgDir, 'auth.json');
+  if (password) {
+    await fs.promises.writeFile(authFile,
+      JSON.stringify({ password: await hashPassword(password) }, null, 2) + '\n', { mode: 0o600 });
+  }
+  const srv = startServer(home, noAuth ? ['--no-auth', ...args] : args);
+  srv.authFile = authFile;
   try {
     return await fn(srv);
   } finally {
     if (srv.child.exitCode === null) {
       srv.child.kill('SIGTERM');
       const gone = new Promise((r) => srv.child.once('exit', r));
-      await withTimeout(gone, 2000, 'tier server exit').catch(() => srv.child.kill('SIGKILL'));
+      await withTimeout(gone, 2000, 'temp server exit').catch(() => srv.child.kill('SIGKILL'));
     }
     fs.rmSync(home, { recursive: true, force: true });
   }
 }
+
+const loginFor = async (port, password = PASS) => {
+  const res = await fetch(`http://127.0.0.1:${port}/login`, {
+    method: 'POST',
+    redirect: 'manual',
+    body: new URLSearchParams({ password }),
+  });
+  assert.equal(res.status, 302, 'login must redirect');
+  return getCookiePair(res, 'rinnegan').split(';')[0];
+};
 
 async function main() {
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-e2e-'));
@@ -269,33 +252,31 @@ async function main() {
   const clients = [];
   const uploadedPaths = []; // /tmp files, batch roots and dirs created by transfer checks; removed in finally
   const track = (c) => { clients.push(c); return c; };
+  const rand = Math.random().toString(36).slice(2, 10);
 
   try {
-    await check('serve with 0 users and auth on refuses to start', async () => {
-      await withTierServer({ users: [] }, async (srv) => {
+    await check('serve with no auth.json refuses to start', async () => {
+      await withTempServer({}, async (srv) => {
         srv.ready.catch(() => {}); // no port is ever printed; we assert on the exit instead
         const code = await withTimeout(new Promise((r) => srv.child.once('exit', r)), 8000, 'server exit');
-        assert.equal(code, 1, `expected exit 1 with no users, got ${code}`);
+        assert.equal(code, 1, `expected exit 1 with no auth.json, got ${code}`);
         const err = srv.getStderr();
-        assert.match(err, /rinnegan user add/, 'error must name `rinnegan user add`');
+        assert.match(err, /rinnegan passwd/, 'error must name `rinnegan passwd`');
         assert.match(err, /--no-auth/, 'error must name --no-auth');
       });
     });
 
-    await check('serve --no-auth binds as nobody with no shared tier', async () => {
-      await withTierServer({ noAuth: true }, async (srv) => {
+    await check('serve --no-auth skips the login page and still serves a terminal', async () => {
+      await withTempServer({ noAuth: true }, async (srv) => {
         const { port } = await withTimeout(srv.ready, 15000, 'no-auth server listening');
         const root = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
         assert.equal(root.status, 200, 'GET / must serve the SPA without a cookie under --no-auth');
         const c = new WSClient(`ws://127.0.0.1:${port}/ws`, null);
         try {
-          assertHelloShape(await c.nextText(5000, 'nobody hello'), 'nobody', 'admin',
-            { offerShared: false, authOn: false });
-          c.send({ t: 'shared', cols: 100, rows: 30 });
-          const err = await c.waitText((m) => m.t === 'error', 5000, 'shared rejected under no-auth');
-          assert.match(err.msg, /shared session unavailable/);
-          await sleep(500);
-          assert.equal(c.bin.length, 0, 'no shared PTY output may reach a no-auth client');
+          assertHelloShape(await c.nextText(5000, 'no-auth hello'), { authOn: false });
+          await c.start(100, 30);
+          c.send({ t: 'input', data: `echo NOAUTH_MAR''KER_${rand}\r`, e: c.epoch });
+          await c.waitBinContains(`NOAUTH_MARKER_${rand}`, 0, 10000, 'no-auth shell output');
         } finally {
           c.terminate();
         }
@@ -306,49 +287,89 @@ async function main() {
       });
     });
 
-    await check('serve with 1 user offers a terminal-only lobby', async () => {
-      const users = [{ username: 'solo', role: 'admin', password: await hashPassword('solo-pass') }];
-      await withTierServer({ users }, async (srv) => {
-        const { port } = await withTimeout(srv.ready, 15000, '1-user server listening');
-        const res = await fetch(`http://127.0.0.1:${port}/login`, {
-          method: 'POST',
-          redirect: 'manual',
-          body: new URLSearchParams({ username: 'solo', password: 'solo-pass' }),
-        });
-        assert.equal(res.status, 302);
-        const cookie = getCookiePair(res, 'rinnegan').split(';')[0];
+    await check('--shell bash boots and runs a bash-identifying command', async () => {
+      await withTempServer({ password: PASS, args: ['--shell', 'bash'] }, async (srv) => {
+        const { port } = await withTimeout(srv.ready, 15000, '--shell bash server listening');
+        const cookie = await loginFor(port);
         const c = new WSClient(`ws://127.0.0.1:${port}/ws`, cookie);
         try {
-          assertHelloShape(await c.nextText(5000, 'solo hello'), 'solo', 'admin',
-            { offerShared: false, authOn: true });
-          c.send({ t: 'shared', cols: 100, rows: 30 });
-          const err = await c.waitText((m) => m.t === 'error', 5000, 'shared rejected for a solo user');
-          assert.match(err.msg, /shared session unavailable/);
-          await sleep(500);
-          assert.equal(c.bin.length, 0, 'the shared PTY must not spawn at boot with a single user');
+          const hello = await c.nextText(5000, '--shell bash hello');
+          assertHelloShape(hello);
+          assert.equal(hello.host.shell, '/usr/bin/env bash -l', '--shell must override terminal.shell from config.json');
+          await c.start(100, 30);
+          // the typed line carries no digit after the underscore; only bash's expansion supplies one
+          c.send({ t: 'input', data: 'echo SHELL_IS_${BASH_VERSION}_END\r', e: c.epoch });
+          await c.waitBinContains('SHELL_IS_', 0, 10000, 'bash version echo');
+          const seen = await (async () => {
+            const end = Date.now() + 10000;
+            while (Date.now() < end) {
+              const m = c.binAll().toString('utf8').match(/SHELL_IS_\d[^\s]*_END/);
+              if (m) return m[0];
+              await sleep(100);
+            }
+            return null;
+          })();
+          assert.ok(seen, 'the spawned shell did not expand $BASH_VERSION, so it was not bash');
         } finally {
           c.terminate();
         }
       });
     });
 
+    await check('--shell with an unaccepted value refuses to start', async () => {
+      await withTempServer({ password: PASS, args: ['--shell', 'bogus'] }, async (srv) => {
+        srv.ready.catch(() => {});
+        const code = await withTimeout(new Promise((r) => srv.child.once('exit', r)), 8000, 'server exit');
+        assert.equal(code, 1, `expected exit 1 for --shell bogus, got ${code}`);
+        assert.match(srv.getStderr(), /--shell must be one of/, 'error must name the accepted shells');
+      });
+    });
+
+    await check('a shell that cannot be spawned reports back instead of hanging', async () => {
+      await withTempServer({ password: PASS, shell: '/nonexistent/rinnegan-e2e-shell -l' }, async (srv) => {
+        const { port } = await withTimeout(srv.ready, 15000, 'bad-shell server listening');
+        const cookie = await loginFor(port);
+        const c = new WSClient(`ws://127.0.0.1:${port}/ws`, cookie);
+        try {
+          assertHelloShape(await c.nextText(5000, 'bad-shell hello'));
+          c.send({ t: 'start', cols: 100, rows: 30 });
+          // whichever way node-pty reports it, the socket must end with no shell and the client on the start card
+          const m = await c.waitText((x) => x.t === 'exited' || x.t === 'error', 10000, 'spawn failure report');
+          if (m.t === 'exited') assert.ok(Number.isInteger(m.epoch), 'exited must carry an epoch');
+          else assert.equal(typeof m.msg, 'string', 'error must carry a message');
+        } finally {
+          c.terminate();
+        }
+      });
+    });
+
+    await check('rotating the password invalidates a live session on refresh', async () => {
+      await withTempServer({ password: PASS }, async (srv) => {
+        const { port } = await withTimeout(srv.ready, 15000, 'rotation server listening');
+        const res = await fetch(`http://127.0.0.1:${port}/login`, {
+          method: 'POST',
+          redirect: 'manual',
+          body: new URLSearchParams({ password: PASS }),
+        });
+        assert.equal(res.status, 302);
+        const refreshCookie = getCookiePair(res, 'rinnegan_rt').split(';')[0];
+        const before = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
+        assert.equal(before.status, 200, 'the refresh cookie must work before the rotation');
+
+        await setPassword(srv.authFile, 'a-brand-new-password');
+        const after = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
+        assert.equal(after.status, 401, 'a rotated password must stop the old session refreshing');
+        // and the new password mints a session that does refresh
+        const fresh = await loginFor(port, 'a-brand-new-password');
+        assert.ok(fresh.length > 'rinnegan='.length, 'the new password must log in');
+      });
+    });
+
     const cfgDir = path.join(tmp, '.config', 'rinnegan');
     await fs.promises.mkdir(cfgDir, { recursive: true });
-
-    await fs.promises.writeFile(path.join(cfgDir, 'users.json'), JSON.stringify({
-      users: [
-        { username: 'tanish', role: 'admin', password: await hashPassword(ADMIN_PASS) },
-        { username: 'engineer-a', role: 'user', password: await hashPassword(USER_PASS) },
-      ],
-    }, null, 2) + '\n', { mode: 0o600 });
-
-    await fs.promises.writeFile(path.join(cfgDir, 'config.json'), JSON.stringify({
-      listen: { host: '127.0.0.1', port: PORT },
-      cookie: { secure: false, name: 'rinnegan', accessTtlSeconds: 3600, refreshTtlSeconds: 604800 },
-      terminal: { shell: '/usr/bin/env sh -l', cwd: tmp, cols: 120, rows: 36, autoRestartShell: false },
-      control: { mode: 'soft', staleControllerSeconds: 5, requestTimeoutSeconds: 30 },
-      buffer: { maxBytes: 65536 },
-    }, null, 2) + '\n');
+    await fs.promises.writeFile(path.join(cfgDir, 'auth.json'),
+      JSON.stringify({ password: await hashPassword(PASS) }, null, 2) + '\n', { mode: 0o600 });
+    await writeServerConfig(cfgDir, tmp);
 
     server = startServer(tmp);
     const { port } = await server.ready;
@@ -369,10 +390,13 @@ async function main() {
       assert.equal(res.headers.get('location'), '/login');
     });
 
-    await check('GET /login serves html', async () => {
+    await check('GET /login serves html with a password field and no username field', async () => {
       const res = await get('/login');
       assert.equal(res.status, 200);
       assert.ok((res.headers.get('content-type') || '').includes('text/html'));
+      const html = await res.text();
+      assert.match(html, /name="password"/, 'login must offer a password field');
+      assert.doesNotMatch(html, /name="username"/, 'the collapsed login must have no username field');
     });
 
     await check('login page ships the silent-resume probe', async () => {
@@ -390,31 +414,38 @@ async function main() {
     });
 
     await check('POST /login wrong password redirects with error', async () => {
-      const res = await post('/login', { username: 'tanish', password: 'wrong-password' });
+      const res = await post('/login', { password: 'wrong-password' });
       assert.equal(res.status, 302);
       assert.equal(res.headers.get('location'), '/login?error=1');
       assert.equal(getCookiePair(res, 'rinnegan'), null, 'must not set session cookie on bad login');
     });
 
-    let cookieAdmin, refreshAdmin;
+    await check('POST /login with an empty body is refused', async () => {
+      const res = await post('/login', {});
+      assert.equal(res.status, 302);
+      assert.equal(res.headers.get('location'), '/login?error=1');
+      assert.equal(getCookiePair(res, 'rinnegan'), null, 'an empty login must not set a session cookie');
+    });
+
+    let cookie, refreshCookie;
     await check('POST /login correct sets both HttpOnly cookies and redirects to /', async () => {
-      const res = await post('/login', { username: 'tanish', password: ADMIN_PASS });
+      const res = await post('/login', { password: PASS });
       assert.equal(res.status, 302);
       assert.equal(res.headers.get('location'), '/');
       const sc = getCookiePair(res, 'rinnegan');
       assert.ok(sc, 'missing Set-Cookie for rinnegan');
       assert.ok(/httponly/i.test(sc), 'cookie must be HttpOnly');
-      cookieAdmin = sc.split(';')[0];
-      assert.ok(cookieAdmin.length > 'rinnegan='.length, 'cookie value empty');
+      cookie = sc.split(';')[0];
+      assert.ok(cookie.length > 'rinnegan='.length, 'cookie value empty');
       const rt = getCookiePair(res, 'rinnegan_rt');
       assert.ok(rt, 'missing Set-Cookie for rinnegan_rt');
       assert.ok(/httponly/i.test(rt), 'refresh cookie must be HttpOnly');
       assert.ok(/path=\/refresh/i.test(rt), 'refresh cookie must be scoped to /refresh');
-      refreshAdmin = rt.split(';')[0];
+      refreshCookie = rt.split(';')[0];
     });
 
     await check('POST /refresh with the refresh cookie mints a fresh access cookie', async () => {
-      const res = await post('/refresh', {}, refreshAdmin);
+      const res = await post('/refresh', {}, refreshCookie);
       assert.equal(res.status, 200);
       const sc = getCookiePair(res, 'rinnegan');
       assert.ok(sc, '/refresh must set a fresh access cookie');
@@ -430,7 +461,7 @@ async function main() {
     });
 
     await check('GET / with cookie serves terminal page', async () => {
-      const res = await get('/', cookieAdmin);
+      const res = await get('/', cookie);
       assert.equal(res.status, 200);
       assert.ok((res.headers.get('content-type') || '').includes('text/html'));
     });
@@ -457,16 +488,6 @@ async function main() {
       assert.ok(vend.headers.get('etag'), 'vendor asset missing ETag');
     });
 
-    let cookieUser;
-    await check('POST /login as engineer-a succeeds', async () => {
-      const res = await post('/login', { username: 'engineer-a', password: USER_PASS });
-      assert.equal(res.status, 302);
-      assert.equal(res.headers.get('location'), '/');
-      const sc = getCookiePair(res, 'rinnegan');
-      assert.ok(sc, 'missing Set-Cookie for engineer-a');
-      cookieUser = sc.split(';')[0];
-    });
-
     await check('WS upgrade without cookie rejected (4401)', async () => {
       const c = track(new WSClient(wsUrl, null));
       const closed = await c.waitClose(5000, 'unauthenticated ws close');
@@ -478,7 +499,7 @@ async function main() {
       const echo = net.createServer((s) => s.pipe(s));
       await new Promise((r) => echo.listen(0, '127.0.0.1', r));
       const echoPort = echo.address().port;
-      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=${echoPort}`, cookieAdmin));
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=${echoPort}`, cookie));
       try {
         await c.waitOpen(5000);
         c.ws.send(Buffer.from('E2E_TUNNEL_ROUNDTRIP'));
@@ -496,19 +517,18 @@ async function main() {
     });
 
     await check('/tunnel with a bad port rejected (4400)', async () => {
-      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=0`, cookieAdmin));
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=0`, cookie));
       const closed = await c.waitClose(5000, 'bad-port tunnel close');
       assert.equal(closed.code, 4400, `expected 4400, got ${closed.code}`);
     });
 
-    await check('client runTunnel logs in and round-trips bytes through the pipe', async () => {
+    await check('client runTunnel logs in with a password alone and round-trips bytes', async () => {
       const echo = net.createServer((s) => s.pipe(s));
       await new Promise((r) => echo.listen(0, '127.0.0.1', r));
       const echoPort = echo.address().port;
       const localPort = await freePort();
       const listener = await runTunnel({
-        server: base, localPort, remotePort: echoPort,
-        username: 'tanish', password: ADMIN_PASS, insecure: false,
+        server: base, localPort, remotePort: echoPort, password: PASS, insecure: false,
       });
       const sock = net.connect(localPort, '127.0.0.1');
       try {
@@ -540,7 +560,7 @@ async function main() {
       const localA = await freePort();
       const localB = await freePort();
       const listeners = await runTunnels({
-        server: base, username: 'tanish', password: ADMIN_PASS, insecure: false,
+        server: base, password: PASS, insecure: false,
         mappings: [{ local: localA, remote: a.port }, { local: localB, remote: b.port }],
       });
       const roundTrip = (localPort, tag) => withTimeout(new Promise((resolve, reject) => {
@@ -563,306 +583,113 @@ async function main() {
       }
     });
 
-    const admin = track(new WSClient(wsUrl, cookieAdmin));
-    let adminHello;
-    await check('WS with cookie: hello carries you/size/state/epoch, no replay', async () => {
-      adminHello = await admin.nextText(5000, 'admin hello');
-      assertHelloShape(adminHello, 'tanish', 'admin');
-      // connecting grants nothing; control is assigned only on attach
-      assert.equal(adminHello.state.controller, null, 'connecting must not auto-grant control');
+    const term = track(new WSClient(wsUrl, cookie));
+    await check('WS with cookie: hello carries epoch/authOn/host and nothing spawns until asked', async () => {
+      assertHelloShape(await term.nextText(5000, 'terminal hello'));
+      await sleep(800);
+      assert.equal(term.bin.length, 0, 'no PTY output may arrive before a start');
+      assert.ok(!term.texts.some((m) => m.t === 'started'), 'the server must not auto-start a shell');
     });
 
-    const eng = track(new WSClient(wsUrl, cookieUser));
-    let engHello;
-    await check('second client hello shows viewers=2', async () => {
-      engHello = await eng.nextText(5000, 'engineer-a hello');
-      assertHelloShape(engHello, 'engineer-a', 'user');
-      assert.equal(engHello.state.viewers, 2);
+    await check('start spawns a terminal and echoes the requested grid', async () => {
+      const m = await term.start(100, 30);
+      assert.equal(m.cols, 100);
+      assert.equal(m.rows, 30);
+      assert.ok(m.epoch > 0, 'start must bump the session epoch past hello');
     });
 
-    await check('lobby is silent: no output; input/resize/control dropped', async () => {
-      // quote-split so the marker only materializes if lobby input wrongly reaches a shell
-      eng.send({ t: 'input', data: "echo E2E_LOBBY_DR''OP\r", e: eng.epoch });
-      eng.send({ t: 'resize', cols: 50, rows: 10, e: eng.epoch });
-      eng.send({ t: 'take' });
-      eng.send({ t: 'request' });
-      await sleep(1000);
-      assert.equal(admin.bin.length, 0, 'binary output reached a lobby connection (tanish)');
-      assert.equal(eng.bin.length, 0, 'binary output reached a lobby connection (engineer-a)');
-      for (const c of [admin, eng]) {
-        assert.ok(!c.texts.some((m) => m.t === 'size' || m.t === 'ended'), 'size/ended frame reached a lobby connection');
-        assert.ok(!c.texts.some((m) => m.t === 'state' && m.controller === 'engineer-a'), 'lobby take/request acquired control');
-      }
-    });
-
-    await check('first shared attach: mode+replay reply, auto-granted control', async () => {
-      const m = await admin.attachShared(120, 36);
-      assert.equal(m.cols, 120, 'sole attacher must get its own natural grid');
-      assert.equal(m.rows, 36);
-      assert.ok(m.epoch > adminHello.epoch, 'attach must bump the session epoch');
-      await admin.waitTextAnywhere((x) => x.t === 'state' && x.controller === 'tanish', 5000, 'auto-grant to first attacher');
-    });
-
-    await check('controller input executes in shell (binary output contains marker)', async () => {
-      // quote-split so the marker only appears once the shell actually runs the command
-      admin.send({ t: 'input', data: "echo E2E_MAR''KER_1\r", e: admin.epoch });
-      await admin.waitBinContains('E2E_MARKER_1', 0, 8000, 'E2E_MARKER_1 in pty output');
-      // had lobby input reached the pty, its output would precede this marker in the replay
-      assert.ok(!admin.binAll().includes('E2E_LOBBY_DROP'), 'lobby input reached the shared pty');
+    await check('input runs in the shell', async () => {
+      // quote-split so the marker only materializes once the shell actually runs the command
+      term.send({ t: 'input', data: `echo E2E_MAR''KER_${rand}\r`, e: term.epoch });
+      await term.waitBinContains(`E2E_MARKER_${rand}`, 0, 10000, 'marker in pty output');
     });
 
     await check('input with a stale session epoch is dropped', async () => {
-      // the sender IS the controller, so a drop can only be the epoch gate
-      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r", e: admin.epoch + 1 });
-      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r" });
-      admin.send({ t: 'input', data: "echo E2E_STALE_EP''OCH\r", e: adminHello.epoch }); // pre-attach (lobby) epoch
+      const off = term.binBytes;
+      term.send({ t: 'input', data: `echo E2E_STALE_EP''OCH_${rand}\r`, e: term.epoch + 1 });
+      term.send({ t: 'input', data: `echo E2E_STALE_EP''OCH_${rand}\r` });
+      term.send({ t: 'input', data: `echo E2E_STALE_EP''OCH_${rand}\r`, e: term.epoch - 1 });
       await sleep(1500);
-      assert.ok(!admin.binAll().includes('E2E_STALE_EPOCH'), 'stale-epoch input reached the shared pty');
+      assert.ok(!term.binAll().slice(off).includes(`E2E_STALE_EPOCH_${rand}`), 'stale-epoch input reached the pty');
     });
 
-    await check('min-grid: a smaller attacher shrinks the shared grid for everyone', async () => {
-      const m = await eng.attachShared(90, 25);
-      assert.equal(m.cols, 90, 'mode reply must carry the recomputed min-grid cols');
-      assert.equal(m.rows, 25, 'mode reply must carry the recomputed min-grid rows');
-      await admin.waitText((x) => x.t === 'size' && x.cols === 90 && x.rows === 25, 5000, 'admin size 90x25');
-    });
-
-    await check('non-controller input is ignored', async () => {
-      eng.send({ t: 'input', data: 'echo E2E_IGNORED_MARK\r', e: eng.epoch });
-      await sleep(1500);
-      assert.ok(!admin.binAll().includes('E2E_IGNORED_MARK'), 'non-controller input leaked to pty (seen by admin)');
-      assert.ok(!eng.binAll().includes('E2E_IGNORED_MARK'), 'non-controller input leaked to pty (seen by engineer-a)');
-    });
-
-    await check('request relayed to controller', async () => {
-      eng.send({ t: 'request' });
-      const req = await admin.waitText((m) => m.t === 'request', 5000, 'request relay to controller');
-      assert.equal(req.from, 'engineer-a');
-    });
-
-    await check('grant transfers control to engineer-a', async () => {
-      admin.send({ t: 'grant', to: 'engineer-a' });
-      const [a, b] = await Promise.all([
-        admin.waitText((m) => m.t === 'state' && m.controller === 'engineer-a', 5000, 'admin state controller=engineer-a'),
-        eng.waitText((m) => m.t === 'state' && m.controller === 'engineer-a', 5000, 'engineer-a state controller=engineer-a'),
-      ]);
-      assert.equal(a.pending, null);
-      assert.equal(b.pending, null);
-    });
-
-    await check('release sets controller to null', async () => {
-      eng.send({ t: 'release' });
-      await Promise.all([
-        admin.waitText((m) => m.t === 'state' && m.controller === null, 5000, 'admin state controller=null'),
-        eng.waitText((m) => m.t === 'state' && m.controller === null, 5000, 'engineer-a state controller=null'),
-      ]);
-    });
-
-    await check('min-grid: member re-report recomputes the grid without control', async () => {
-      // controller is null here: resize is a natural-size report from any member, not a control privilege
-      eng.send({ t: 'resize', cols: 100, rows: 30, e: eng.epoch });
-      await Promise.all([
-        admin.waitText((m) => m.t === 'size' && m.cols === 100 && m.rows === 30, 5000, 'admin size 100x30'),
-        eng.waitText((m) => m.t === 'size' && m.cols === 100 && m.rows === 30, 5000, 'engineer-a size 100x30'),
-      ]);
-    });
-
-    await check('min-grid: member disconnect restores the larger grid', async () => {
-      const mgc = track(new WSClient(wsUrl, cookieUser));
-      assertHelloShape(await mgc.nextText(5000, 'min-grid socket hello'), 'engineer-a', 'user');
-      const m = await mgc.attachShared(80, 20);
-      assert.equal(m.cols, 80);
-      assert.equal(m.rows, 20);
-      await admin.waitText((x) => x.t === 'size' && x.cols === 80 && x.rows === 20, 5000, 'admin size 80x20');
-      mgc.terminate();
-      // min over the remaining members: tanish 120x36, engineer-a 100x30
-      await admin.waitText((x) => x.t === 'size' && x.cols === 100 && x.rows === 30, 5000, 'admin size 100x30 after detach');
-    });
-
-    await check('admin restart sends RIS and terminal keeps working', async () => {
-      const off = admin.binBytes;
-      admin.send({ t: 'restart' });
-      await admin.waitBinContains('\x1bc', off, 8000, 'RIS (\\x1bc) after restart');
-      await admin.waitText((m) => m.t === 'size', 5000, 'size broadcast after restart');
-      admin.send({ t: 'take' });
-      await admin.waitText((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'controller=tanish after restart');
-      admin.send({ t: 'input', data: "echo E2E_AFTER_RE''START\r", e: admin.epoch });
-      await admin.waitBinContains('E2E_AFTER_RESTART', off, 8000, 'E2E_AFTER_RESTART after restart');
-    });
-
-    await check('kickAll closes all sockets with 4000', async () => {
-      admin.send({ t: 'kickAll' });
-      const [ca, cb] = await Promise.all([
-        admin.waitClose(5000, 'admin close after kickAll'),
-        eng.waitClose(5000, 'engineer-a close after kickAll'),
-      ]);
-      assert.equal(ca.code, 4000, `admin close code ${ca.code}`);
-      assert.equal(cb.code, 4000, `engineer-a close code ${cb.code}`);
-    });
-
-    await check('attach clamps the natural grid to 20..500 cols and 5..200 rows', async () => {
-      const cc = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await cc.nextText(5000, 'clamp attach hello'), 'tanish', 'admin');
-      const m = await cc.attachShared(9999, 1); // sole member: the min IS the clamp
+    await check('start clamps the requested grid to 20..500 cols and 5..200 rows', async () => {
+      const cc = track(new WSClient(wsUrl, cookie));
+      assertHelloShape(await cc.nextText(5000, 'clamp hello'));
+      const m = await cc.start(9999, 1);
       assert.equal(m.cols, 500);
       assert.equal(m.rows, 5);
       cc.ws.close();
-      await cc.waitClose(5000, 'clamp socket close'); // fully detach before the next attach recomputes
+      await cc.waitClose(5000, 'clamp socket close');
     });
 
-    await check('reconnect lands in the lobby; attaching replays the buffer', async () => {
-      const c2 = track(new WSClient(wsUrl, cookieAdmin));
-      const hello = await c2.nextText(5000, 'reconnect hello');
-      assertHelloShape(hello, 'tanish', 'admin');
-      assert.equal(hello.state.controller, 'tanish', 'stale-controller reservation must survive the kick');
-      const m = await c2.attachShared(100, 30);
-      assert.equal(m.cols, 100, 'sole attacher must reset the grid held at 500x5');
-      assert.equal(m.rows, 30);
-      assert.ok(m.bufferBytes > 0, `expected bufferBytes > 0, got ${m.bufferBytes}`);
-      assert.ok(m.replay.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior output');
-      c2.skipTexts();
-      c2.send({ t: 'release' }); // leave control vacant for the split section below
-      await c2.waitText((x) => x.t === 'state' && x.controller === null, 5000, 'controller vacated');
-      c2.ws.close();
-      await c2.waitClose(5000, 'reconnect socket close');
-    });
-
-    await check('POST /logout clears the cookie', async () => {
-      const res = await post('/logout', {}, cookieAdmin);
-      assert.equal(res.status, 302);
-      assert.equal(res.headers.get('location'), '/login');
-      const sc = getCookiePair(res, 'rinnegan');
-      assert.ok(sc, 'logout missing Set-Cookie');
-      assert.ok(/max-age=0/i.test(sc), 'logout cookie must have Max-Age=0');
-      assert.equal(sc.split(';')[0], 'rinnegan=', 'logout cookie value must be empty');
-    });
-
-    // logout only clears the browser cookie (no revocation list), so these earlier cookies remain valid
-    const sa = track(new WSClient(wsUrl, cookieAdmin)); // toggles split/shared/lobby
-    const sb = track(new WSClient(wsUrl, cookieUser)); // stays shared: must never see split output
-    const rand = Math.random().toString(36).slice(2, 10);
-
-    await check('split works directly from the lobby (mode reply echoes size)', async () => {
-      const saHello = await sa.nextText(5000, 'split admin hello');
-      assertHelloShape(saHello, 'tanish', 'admin');
-      assert.equal(saHello.state.controller, null, 'control must be vacant after the release above');
-      assertHelloShape(await sb.nextText(5000, 'split viewer hello'), 'engineer-a', 'user');
-      sa.send({ t: 'split', cols: 100, rows: 30 }); // never attached to shared
-      const m = await sa.waitText((x) => x.t === 'mode', 8000, 'mode reply after split');
-      assert.equal(m.mode, 'split');
-      assert.equal(m.cols, 100);
-      assert.equal(m.rows, 30);
-    });
-
-    await check('split size is clamped to 20..500 cols and 5..200 rows', async () => {
-      const sc = track(new WSClient(wsUrl, cookieUser));
-      assertHelloShape(await sc.nextText(5000, 'clamp socket hello'), 'engineer-a', 'user');
-      sc.send({ t: 'split', cols: 9999, rows: 1 });
-      const m = await sc.waitText((x) => x.t === 'mode', 8000, 'clamped mode reply');
-      assert.equal(m.mode, 'split');
-      assert.equal(m.cols, 500);
-      assert.equal(m.rows, 5);
-      sc.ws.close(); // disconnect must kill this split pty server-side
-    });
-
-    await check('attaching to shared auto-grants vacant control', async () => {
-      const m = await sb.attachShared(100, 30);
-      assert.equal(m.cols, 100);
-      assert.equal(m.rows, 30);
-      await sb.waitTextAnywhere((x) => x.t === 'state' && x.controller === 'engineer-a', 5000, 'auto-grant on attach');
-    });
-
-    await check('split output is isolated from shared viewers', async () => {
-      // quote-split so the marker only appears once the split shell runs it
-      sa.send({ t: 'input', data: `echo SPLIT_MAR''KER_${rand}\r`, e: sa.epoch });
-      await sa.waitBinContains(`SPLIT_MARKER_${rand}`, 0, 10000, 'split marker in own output');
-      await sleep(1500); // window for any (wrongly broadcast) output to reach the viewer
-      assert.ok(!sb.binAll().includes(`SPLIT_MARKER_${rand}`), 'split output leaked to a shared viewer');
-    });
-
-    await check('split input needs no control', async () => {
-      // sa never attached to shared, so the latest control broadcast must not name it
-      const lastState = sa.texts.filter((m) => m.t === 'state').pop();
-      assert.ok(lastState, 'expected at least one control-state broadcast on the split socket');
-      assert.notEqual(lastState.controller, 'tanish', 'split socket must not hold shared control');
-      const off = sa.binBytes;
-      sa.send({ t: 'input', data: `echo SPLIT_NOC''TRL_${rand}\r`, e: sa.epoch });
-      await sa.waitBinContains(`SPLIT_NOCTRL_${rand}`, off, 10000, 'non-controller split input output');
-    });
-
-    await check('shared output is isolated from split sockets', async () => {
-      // sb drives the shared shell; none of its output may reach the split socket
-      sb.send({ t: 'input', data: `echo SHARED_MAR''KER_${rand}\r`, e: sb.epoch });
-      await sb.waitBinContains(`SHARED_MARKER_${rand}`, 0, 10000, 'shared marker on the shared socket');
-      await sleep(1500); // window for any (wrongly broadcast) shared output to reach sa
-      assert.ok(!sa.binAll().includes(`SHARED_MARKER_${rand}`), 'shared output leaked to a split socket');
-      sb.skipTexts();
-      sb.send({ t: 'release' });
-      await sb.waitText((m) => m.t === 'state' && m.controller === null, 5000, 'sb releases control');
-    });
-
-    await check('splitting as controller releases control (broadcast to viewers)', async () => {
-      // assert the auto-grant without consuming (racing skipTexts against the coalesced grant frame is flaky)
-      await sa.attachShared(100, 30); // back to shared: vacant control auto-grants to sa
-      await Promise.all([
-        sa.waitTextAnywhere((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'sa sees controller=tanish'),
-        sb.waitTextAnywhere((m) => m.t === 'state' && m.controller === 'tanish', 5000, 'sb sees controller=tanish'),
-      ]);
-      sb.skipTexts();
-      sa.send({ t: 'split', cols: 100, rows: 30 });
-      await sb.waitText((m) => m.t === 'state' && m.controller === null, 5000, 'release broadcast to shared viewer');
-      const m = await sa.waitText((x) => x.t === 'mode', 8000, 'mode reply after controller split');
-      assert.equal(m.mode, 'split');
-    });
-
-    await check('explicit return from split goes straight to shared with replay', async () => {
-      // attachShared fails on any lobby hop: the intentional button skips the chooser
-      const m = await sa.attachShared(100, 30);
-      assert.ok(m.bufferBytes > 0, `expected bufferBytes > 0, got ${m.bufferBytes}`);
-      assert.ok(m.replay.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior shared output');
-    });
-
-    await check('split owner resizes own pty without control', async () => {
-      sa.send({ t: 'split', cols: 100, rows: 30 });
-      await sa.waitText((x) => x.t === 'mode' && x.mode === 'split', 8000, 'mode split before resize');
-      sa.send({ t: 'resize', cols: 90, rows: 25, e: sa.epoch });
+    await check('resize resizes the socket\'s own pty', async () => {
+      term.send({ t: 'resize', cols: 90, rows: 25, e: term.epoch });
       await sleep(300); // let the resize land before querying
-      const off = sa.binBytes;
-      sa.send({ t: 'input', data: 'stty size\r', e: sa.epoch });
-      await sa.waitBinContains('25 90', off, 10000, '"25 90" from stty size');
+      const off = term.binBytes;
+      term.send({ t: 'input', data: 'stty size\r', e: term.epoch });
+      await term.waitBinContains('25 90', off, 10000, '"25 90" from stty size');
     });
 
-    await check('split shell exit sends splitExited then lands in the lobby', async () => {
-      const splitEpoch = sa.epoch;
-      // stale-epoch input on a split socket must be dropped, not run anywhere
-      sa.send({ t: 'input', data: `echo STALE_SP''LIT_${rand}\r`, e: sa.epoch - 1 });
-      sa.send({ t: 'input', data: 'exit\r', e: sa.epoch });
-      const exited = await sa.waitText((m) => m.t === 'splitExited', 10000, 'splitExited');
-      assert.ok('code' in exited, 'splitExited missing exit code');
-      const m = await sa.waitText((x) => x.t === 'mode', 8000, 'mode after splitExited');
-      assert.equal(m.mode, 'lobby', 'split exit must land in the lobby, not shared');
-      assert.ok(Number.isInteger(m.epoch) && m.epoch > splitEpoch, 'lobby mode frame must carry a bumped epoch');
-      assert.ok(!('bufferBytes' in m) && !('cols' in m), 'lobby mode frame must carry epoch only');
-      const binCount = sa.bin.length;
-      const textCount = sa.texts.length;
+    await check('one socket\'s output is isolated from another\'s', async () => {
+      const other = track(new WSClient(wsUrl, cookie));
+      assertHelloShape(await other.nextText(5000, 'isolation hello'));
+      await other.start(100, 30);
+      other.send({ t: 'input', data: `echo ISOLA''TED_${rand}\r`, e: other.epoch });
+      await other.waitBinContains(`ISOLATED_${rand}`, 0, 10000, 'own output on the second socket');
+      await sleep(1000); // window for any (wrongly broadcast) output to cross over
+      assert.ok(!term.binAll().includes(`ISOLATED_${rand}`), 'output leaked across sockets');
+      other.ws.close();
+      await other.waitClose(5000, 'isolation socket close');
+    });
+
+    await check('exiting the shell sends one exited frame and a fresh start works', async () => {
+      const ec = track(new WSClient(wsUrl, cookie));
+      assertHelloShape(await ec.nextText(5000, 'exit hello'));
+      const first = await ec.start(100, 30);
+      ec.send({ t: 'input', data: 'exit\r', e: first.epoch });
+      const exited = await ec.waitText((m) => m.t === 'exited', 10000, 'exited');
+      assert.ok('code' in exited, 'exited missing exit code');
+      assert.ok(Number.isInteger(exited.epoch) && exited.epoch > first.epoch, 'exited must bump the epoch');
+      const binCount = ec.bin.length;
+      const textCount = ec.texts.length;
       await sleep(800);
-      assert.equal(sa.bin.length, binCount, 'no replay may follow the drop to the lobby');
-      assert.ok(!sa.texts.slice(textCount).some((x) => x.t === 'mode'), 'no auto mode switch may follow the drop to the lobby');
-      assert.ok(!sa.binAll().includes(`STALE_SPLIT_${rand}`), 'stale-epoch input executed in the split');
-      assert.ok(!sb.binAll().includes(`STALE_SPLIT_${rand}`), 'stale-epoch split input crossed into the shared pty');
+      assert.equal(ec.bin.length, binCount, 'no output may follow the exit');
+      assert.ok(!ec.texts.slice(textCount).some((x) => x.t === 'started'), 'nothing may auto-restart server-side');
+
+      const second = await ec.start(100, 30);
+      assert.ok(second.epoch > exited.epoch, 'a start after the exit must bump the epoch again');
+      const off = ec.binBytes;
+      ec.send({ t: 'input', data: `echo AFTER_EX''IT_${rand}\r`, e: ec.epoch });
+      await ec.waitBinContains(`AFTER_EXIT_${rand}`, off, 10000, 'output from the shell started after the exit');
+      ec.ws.close();
+      await ec.waitClose(5000, 'exit socket close');
     });
 
-    await check('attaching from the post-exit lobby delivers the shared replay', async () => {
-      const m = await sa.attachShared(100, 30);
-      assert.ok(m.bufferBytes > 0, `expected bufferBytes > 0, got ${m.bufferBytes}`);
-      assert.ok(m.replay.includes('E2E_AFTER_RESTART'), 'replayed buffer missing prior shared output');
+    await check('a restart\'s dead shell does not knock its live successor offline', async () => {
+      const rc = track(new WSClient(wsUrl, cookie));
+      assertHelloShape(await rc.nextText(5000, 'restart hello'));
+      const first = await rc.start(100, 30);
+      rc.send({ t: 'input', data: `echo RESTART_BEF''ORE_${rand}\r`, e: rc.epoch });
+      await rc.waitBinContains(`RESTART_BEFORE_${rand}`, 0, 10000, 'first shell output');
+
+      const textCount = rc.texts.length;
+      const second = await rc.start(100, 30);
+      assert.ok(second.epoch > first.epoch, 'a restart must bump the epoch');
+      await sleep(1200); // window for the killed shell's exit to land on its successor
+      assert.ok(!rc.texts.slice(textCount).some((x) => x.t === 'exited'),
+        'the killed shell must not emit exited over a live successor');
+      const off = rc.binBytes;
+      rc.send({ t: 'input', data: `echo RESTART_AFT''ER_${rand}\r`, e: rc.epoch });
+      await rc.waitBinContains(`RESTART_AFTER_${rand}`, off, 10000, 'restarted shell output');
+      rc.ws.close();
+      await rc.waitClose(5000, 'restart socket close');
     });
 
-    await check('disconnect kills the split shell process', async () => {
-      const sd = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await sd.nextText(5000, 'disconnect socket hello'), 'tanish', 'admin');
-      sd.send({ t: 'split', cols: 100, rows: 30 });
-      await sd.waitText((m) => m.t === 'mode' && m.mode === 'split', 8000, 'mode split before disconnect');
+    await check('disconnect kills the shell process', async () => {
+      const sd = track(new WSClient(wsUrl, cookie));
+      assertHelloShape(await sd.nextText(5000, 'disconnect hello'));
+      await sd.start(100, 30);
       // $$ expands only when the shell runs it; the typed echo has no digits there
       sd.send({ t: 'input', data: 'echo "PID:$$:DIP"\r', e: sd.epoch });
       let pid = null;
@@ -872,7 +699,7 @@ async function main() {
         if (m) { pid = Number(m[1]); break; }
         await sleep(100);
       }
-      assert.ok(Number.isInteger(pid) && pid > 1, `could not parse split shell pid (got ${pid})`);
+      assert.ok(Number.isInteger(pid) && pid > 1, `could not parse shell pid (got ${pid})`);
       process.kill(pid, 0); // must be alive before the disconnect
       sd.terminate();
       let gone = false;
@@ -881,19 +708,18 @@ async function main() {
         try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') { gone = true; } break; }
         await sleep(200);
       }
-      assert.ok(gone, `split shell pid ${pid} still alive after disconnect`);
+      assert.ok(gone, `shell pid ${pid} still alive after disconnect`);
     });
 
-    await check('tmux server survives split shell death (skipped without tmux)', async () => {
+    await check('tmux server survives shell death (skipped without tmux)', async () => {
       if (await runCmd('tmux', ['-V']) !== 0) {
         console.log('# note: tmux not on PATH — skipping tmux survival check');
         return;
       }
       const sess = `webterm-e2e-${process.pid}`;
-      const se = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await se.nextText(5000, 'tmux socket hello'), 'tanish', 'admin');
-      se.send({ t: 'split', cols: 100, rows: 30 });
-      await se.waitText((m) => m.t === 'mode' && m.mode === 'split', 8000, 'mode split for tmux check');
+      const se = track(new WSClient(wsUrl, cookie));
+      assertHelloShape(await se.nextText(5000, 'tmux hello'));
+      await se.start(100, 30);
       const off = se.binBytes;
       se.send({ t: 'input', data: `tmux new-session -d -s ${sess} && echo TMUX_'U'P_OK || echo TMUX_'U'P_FAIL\r`, e: se.epoch });
       let started = null;
@@ -905,19 +731,18 @@ async function main() {
         await sleep(100);
       }
       if (started === false) {
-        console.log('# note: tmux unusable inside the split shell — skipping tmux survival check');
+        console.log('# note: tmux unusable inside the shell — skipping tmux survival check');
         se.ws.close();
         return;
       }
-      assert.ok(started, 'timed out waiting for tmux new-session inside the split');
+      assert.ok(started, 'timed out waiting for tmux new-session');
       try {
-        await se.attachShared(100, 30); // kills the split pty immediately
-        await sleep(500); // give the split shell time to die
+        se.terminate(); // kills the pty immediately
+        await sleep(1000); // give the shell time to die
         assert.equal(await runCmd('tmux', ['has-session', '-t', sess]), 0,
-          'tmux session must survive the split shell being killed');
+          'tmux session must survive the shell being killed');
       } finally {
         await runCmd('tmux', ['kill-session', '-t', sess]); // clean up ONLY our session
-        se.ws.close();
       }
     });
 
@@ -927,7 +752,7 @@ async function main() {
     await check('POST /upload streams a file to /tmp with a 5-char random prefix', async () => {
       const res = await fetch(base + '/upload?name=e2e-upload.txt', {
         method: 'POST',
-        headers: { cookie: cookieAdmin },
+        headers: { cookie },
         body: uploadBody,
       });
       assert.equal(res.status, 200);
@@ -944,7 +769,7 @@ async function main() {
       const body = Buffer.from('SANITIZE_BODY_' + rand);
       const send = () => fetch(base + '/upload?name=' + encodeURIComponent(nasty), {
         method: 'POST',
-        headers: { cookie: cookieUser },
+        headers: { cookie },
         body,
       });
       const a = await (await send()).json();
@@ -970,14 +795,14 @@ async function main() {
     await check('GET /download round-trips an uploaded file', async () => {
       const head = await fetch(base + '/download?path=' + encodeURIComponent(uploadedFile), {
         method: 'HEAD',
-        headers: { cookie: cookieUser },
+        headers: { cookie },
       });
       assert.equal(head.status, 200);
       assert.equal(head.headers.get('content-length'), String(uploadBody.length));
       assert.ok((head.headers.get('content-disposition') || '').includes('attachment'),
         'download must be sent as an attachment');
       const res = await fetch(base + '/download?path=' + encodeURIComponent(uploadedFile), {
-        headers: { cookie: cookieUser },
+        headers: { cookie },
       });
       assert.equal(res.status, 200);
       assert.deepEqual(Buffer.from(await res.arrayBuffer()), uploadBody, 'downloaded bytes differ from source');
@@ -986,10 +811,10 @@ async function main() {
     await check('download probe rejects bad paths', async () => {
       const missing = await fetch(base + '/download?path=/tmp/e2e-missing-' + rand, {
         method: 'HEAD',
-        headers: { cookie: cookieAdmin },
+        headers: { cookie },
       });
       assert.equal(missing.status, 404);
-      const rel = await fetch(base + '/download?path=relative', { headers: { cookie: cookieAdmin } });
+      const rel = await fetch(base + '/download?path=relative', { headers: { cookie } });
       assert.equal(rel.status, 400);
     });
 
@@ -998,9 +823,7 @@ async function main() {
       fs.mkdirSync(dir, { recursive: true });
       uploadedPaths.push(dir);
       fs.writeFileSync(path.join(dir, 'inside.txt'), 'DIR_BODY_' + rand + '\n');
-      const res = await fetch(base + '/download?path=' + encodeURIComponent(dir), {
-        headers: { cookie: cookieAdmin },
-      });
+      const res = await fetch(base + '/download?path=' + encodeURIComponent(dir), { headers: { cookie } });
       assert.equal(res.status, 200);
       assert.equal(res.headers.get('content-type'), 'application/gzip');
       assert.ok((res.headers.get('content-disposition') || '').endsWith('.tar.gz"'),
@@ -1013,7 +836,7 @@ async function main() {
     await check('batch upload lands nested paths under one root and rejects traversal', async () => {
       const created = await fetch(base + '/upload/batch', {
         method: 'POST',
-        headers: { cookie: cookieAdmin, 'content-type': 'application/json' },
+        headers: { cookie, 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'e2e-dir' }),
       });
       assert.equal(created.status, 200);
@@ -1022,93 +845,31 @@ async function main() {
       assert.match(root, /^\/tmp\/[a-z0-9]{5}-e2e-dir$/, `unexpected root ${root}`);
       const body = Buffer.from('BATCH_BODY_' + rand + '\n');
       const one = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
-        '&path=' + encodeURIComponent('sub/one.txt'), {
-        method: 'POST',
-        headers: { cookie: cookieAdmin },
-        body,
-      });
+        '&path=' + encodeURIComponent('sub/one.txt'), { method: 'POST', headers: { cookie }, body });
       assert.equal(one.status, 200);
       assert.equal((await one.json()).path, root + '/sub/one.txt');
       assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'batch bytes differ from source');
       // a colliding sibling must fail-closed (409), never silently clobber the first file
       const collide = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
-        '&path=' + encodeURIComponent('sub/one.txt'), {
-        method: 'POST',
-        headers: { cookie: cookieAdmin },
-        body: 'CLOBBER',
-      });
+        '&path=' + encodeURIComponent('sub/one.txt'), { method: 'POST', headers: { cookie }, body: 'CLOBBER' });
       assert.equal(collide.status, 409, 'a name collision must be refused, not overwrite');
       assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'the original file must survive a collision');
       const evil = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
-        '&path=' + encodeURIComponent('../evil'), {
-        method: 'POST',
-        headers: { cookie: cookieAdmin },
-        body: 'pwned',
-      });
+        '&path=' + encodeURIComponent('../evil'), { method: 'POST', headers: { cookie }, body: 'pwned' });
       assert.equal(evil.status, 400, 'traversal must be rejected');
-      const unknown = await fetch(base + '/upload?batch=deadbeef0000dead&path=' + encodeURIComponent('x.txt'), {
-        method: 'POST',
-        headers: { cookie: cookieAdmin },
-        body: 'orphan',
-      });
+      const unknown = await fetch(base + '/upload?batch=deadbeef0000dead&path=' + encodeURIComponent('x.txt'),
+        { method: 'POST', headers: { cookie }, body: 'orphan' });
       assert.equal(unknown.status, 400, 'unknown batch must be rejected');
     });
 
-    await check('leaving shared returns to the lobby but keeps the shared shell alive', async () => {
-      // state here: sa (tanish) holds control in shared, sb (engineer-a) is a shared viewer
-      sa.skipTexts();
-      sb.skipTexts();
-      const leftEpoch = sa.epoch;
-      const binBefore = sa.bin.length;
-      sa.send({ t: 'lobby' });
-      const m = await sa.waitText((x) => x.t === 'mode' && x.mode === 'lobby', 5000, 'sa mode lobby');
-      assert.ok(m.epoch > leftEpoch, 'leaving must bump the epoch');
-      assert.ok(!('bufferBytes' in m) && !('cols' in m), 'lobby frame carries epoch only');
-      // sa held control → released; the remaining viewer sees it vacated
-      await sb.waitText((x) => x.t === 'state' && x.controller === null, 5000, 'control released on leave');
-      await sleep(500);
-      assert.equal(sa.bin.length, binBefore, 'no PTY output/replay may follow the drop to the lobby');
-      // the shared shell is untouched: sb takes the vacated control and its command runs
-      sb.send({ t: 'take' });
-      await sb.waitText((x) => x.t === 'state' && x.controller === 'engineer-a', 5000, 'sb takes vacated control');
-      const off = sb.binBytes;
-      sb.send({ t: 'input', data: `echo LEFT_SHARED_AL''IVE_${rand}\r`, e: sb.epoch });
-      await sb.waitBinContains(`LEFT_SHARED_ALIVE_${rand}`, off, 8000, 'shared shell still runs after a viewer left');
-      // sa, now in the lobby, re-attaches; the replay carries sb's post-leave marker
-      const back = await sa.attachShared(100, 30);
-      assert.ok(back.bufferBytes > 0 && back.replay.includes(`LEFT_SHARED_ALIVE_${rand}`),
-        'lobby→shared replay missing output produced while away');
-    });
-
-    await check('leaving a split from the panel kills the shell and returns to the lobby', async () => {
-      const lx = track(new WSClient(wsUrl, cookieAdmin));
-      assertHelloShape(await lx.nextText(5000, 'leave-split hello'), 'tanish', 'admin');
-      lx.send({ t: 'split', cols: 100, rows: 30 });
-      await lx.waitText((x) => x.t === 'mode' && x.mode === 'split', 8000, 'mode split before leave');
-      lx.send({ t: 'input', data: 'echo "PID:$$:DIP"\r', e: lx.epoch });
-      let pid = null;
-      const parseEnd = Date.now() + 10000;
-      while (Date.now() < parseEnd) {
-        const mm = lx.binAll().toString('utf8').match(/PID:(\d+):DIP/);
-        if (mm) { pid = Number(mm[1]); break; }
-        await sleep(100);
-      }
-      assert.ok(Number.isInteger(pid) && pid > 1, `could not parse split pid (got ${pid})`);
-      const textCount = lx.texts.length;
-      lx.send({ t: 'lobby' });
-      const m = await lx.waitText((x) => x.t === 'mode' && x.mode === 'lobby', 8000, 'mode lobby after leaving split');
-      assert.ok(!('cols' in m) && !('bufferBytes' in m), 'lobby frame carries epoch only');
-      assert.ok(!lx.texts.slice(textCount).some((x) => x.t === 'splitExited'),
-        'leaving intentionally must not emit splitExited');
-      let gone = false;
-      const killEnd = Date.now() + 6000;
-      while (Date.now() < killEnd) {
-        try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') gone = true; break; }
-        await sleep(200);
-      }
-      assert.ok(gone, `split shell pid ${pid} survived leaving to the lobby`);
-      lx.ws.close();
-      await lx.waitClose(5000, 'leave-split socket close');
+    await check('POST /logout clears the cookie', async () => {
+      const res = await post('/logout', {}, cookie);
+      assert.equal(res.status, 302);
+      assert.equal(res.headers.get('location'), '/login');
+      const sc = getCookiePair(res, 'rinnegan');
+      assert.ok(sc, 'logout missing Set-Cookie');
+      assert.ok(/max-age=0/i.test(sc), 'logout cookie must have Max-Age=0');
+      assert.equal(sc.split(';')[0], 'rinnegan=', 'logout cookie value must be empty');
     });
 
     console.log(`# ${checksPassed} checks passed`);

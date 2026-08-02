@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
-import { addUser, setPassword, listUsers } from '../src/users.js';
+import { setPassword } from '../src/password.js';
 import { start } from '../src/server.js';
 import { runTunnel, runTunnels, parseTunnelConfig, validatePort } from '../src/tunnel-client.js';
 
 const USAGE = `usage:
-  rinnegan serve [--https] [--no-auth] [--refresh-caddyfile]
+  rinnegan serve [--https] [--no-auth] [--shell zsh|bash|fish] [--refresh-caddyfile]
   (--https serves via the bundled Caddy with a self-signed cert on :8443)
   (--no-auth disables all authentication; anyone who reaches the port gets a host shell)
+  (--shell overrides terminal.shell from config.json; anything else is a startup error)
   (--refresh-caddyfile overwrites the runtime Caddyfile from the shipped template, discarding local edits)
-  rinnegan tunnel --server <url> --local <port> --remote <port> --username <name> [--insecure]
+  rinnegan tunnel --server <url> --local <port> --remote <port> [--insecure]
   (forwards localhost:<local> to the server's localhost:<remote> over an authenticated WebSocket)
-  rinnegan tunnel --config <path> --username <name> [--insecure]
+  rinnegan tunnel --config <path> [--insecure]
   (forwards every mapping in a JSON config: { "server": <url>, "ports": ["<local>:<remote>", ...] })
   (--insecure skips TLS verification, for the bundled self-signed Caddy cert or a bare IP)
-  rinnegan user add --username <name> [--role admin|user]
-  rinnegan user passwd --username <name>
-  rinnegan user list
+  rinnegan passwd
+  (sets the single login password, creating auth.json on first use)
   rinnegan version
 `;
 
@@ -107,23 +107,14 @@ async function promptNewPassword() {
   const password = await promptPassword('Password: ');
   const confirm = await promptPassword('Confirm password: ');
   if (password !== confirm) throw new Error('passwords do not match');
+  if (password.length === 0) throw new Error('password must not be empty');
   return password;
 }
 
-async function userAdd(flags) {
+async function passwd() {
   const cfg = loadConfig();
-  const username = requireFlag(flags, 'username');
-  const role = flags.role ?? 'user';
-  if (role !== 'admin' && role !== 'user') throw new Error("--role must be 'admin' or 'user'");
   const password = await promptNewPassword();
-  await addUser(cfg.usersFile, username, role, password);
-}
-
-async function userPasswd(flags) {
-  const cfg = loadConfig();
-  const username = requireFlag(flags, 'username');
-  const password = await promptNewPassword();
-  await setPassword(cfg.usersFile, username, password);
+  await setPassword(cfg.authFile, password);
 }
 
 function loadTunnelConfig(path) {
@@ -134,12 +125,11 @@ function loadTunnelConfig(path) {
 }
 
 async function tunnel(flags) {
-  const username = requireFlag(flags, 'username');
   const insecure = flags.insecure === true;
   if (flags.config) {
     const { server, mappings } = loadTunnelConfig(flags.config);
-    const password = await promptPassword(`Password for ${username}: `);
-    await runTunnels({ server, mappings, username, password, insecure });
+    const password = await promptPassword(`Password for ${server}: `);
+    await runTunnels({ server, mappings, password, insecure });
     return;
   }
   const server = requireFlag(flags, 'server');
@@ -147,15 +137,8 @@ async function tunnel(flags) {
   if (localPort === null) throw new Error('--local must be a port 1-65535');
   const remotePort = validatePort(requireFlag(flags, 'remote'));
   if (remotePort === null) throw new Error('--remote must be a port 1-65535');
-  const password = await promptPassword(`Password for ${username}: `);
-  await runTunnel({ server, localPort, remotePort, username, password, insecure });
-}
-
-function userList() {
-  const cfg = loadConfig();
-  for (const user of listUsers(cfg.usersFile)) {
-    process.stdout.write(`${user.username}\t${user.role}\n`);
-  }
+  const password = await promptPassword(`Password for ${server}: `);
+  await runTunnel({ server, localPort, remotePort, password, insecure });
 }
 
 function printVersion() {
@@ -172,12 +155,8 @@ async function main() {
       return start(loadConfig(), flags);
     case 'tunnel':
       return tunnel(flags);
-    case 'user add':
-      return userAdd(flags);
-    case 'user passwd':
-      return userPasswd(flags);
-    case 'user list':
-      return userList();
+    case 'passwd':
+      return passwd();
     case 'version':
       return printVersion();
     default:

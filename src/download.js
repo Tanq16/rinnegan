@@ -20,7 +20,7 @@ function attachment(name) {
   return 'attachment; filename="' + name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') + '"';
 }
 
-export async function handleDownload(req, res, searchParams, username) {
+export async function handleDownload(req, res, searchParams) {
   const p = searchParams.get('path');
   if (!p) return badRequest(res, 'missing path');
   if (!p.startsWith('/')) return badRequest(res, 'path must be absolute');
@@ -44,7 +44,7 @@ export async function handleDownload(req, res, searchParams, username) {
       'Cache-Control': 'no-store',
     });
     if (head) return res.end();
-    info('download: ' + username + ' ' + resolved);
+    info('download: ' + resolved);
     // pipeline (unlike pipe) destroys the read stream on client disconnect, so aborted downloads do not leak file descriptors
     pipeline(createReadStream(resolved), res, () => {});
     return;
@@ -83,7 +83,7 @@ export async function handleDownload(req, res, searchParams, username) {
       if (child.exitCode === null && child.signalCode === null) child.kill();
     });
     res.writeHead(200, headers);
-    info('download: ' + username + ' ' + resolved);
+    info('download: ' + resolved);
     res.on('error', () => {});
     child.stdout.pipe(res, { end: false });
     return;

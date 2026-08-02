@@ -20,31 +20,33 @@ function forge(payloadObj, secret) {
 
 const now = () => Math.floor(Date.now() / 1000);
 
+const FP = 'Zm9vYmFyMTIzNDU2';
+
 test('signSession/verifySession round trip', () => {
-  const token = signSession({ sub: 'alice', role: 'admin', typ: 'access' }, SECRET, 3600);
+  const token = signSession({ fp: FP, typ: 'access' }, SECRET, 3600);
   const payload = verifySession(token, SECRET);
-  assert.equal(payload.sub, 'alice');
-  assert.equal(payload.role, 'admin');
+  assert.equal(payload.fp, FP);
   assert.equal(payload.typ, 'access');
   assert.equal(payload.exp - payload.iat, 3600);
   assert.equal(typeof payload.sid, 'string');
   assert.equal(payload.sid.length, 16);
+  assert.ok(!('sub' in payload) && !('role' in payload), 'the collapsed token must carry no identity claims');
 });
 
 test('verifySession enforces the expected token type', () => {
-  const access = signSession({ sub: 'alice', role: 'user', typ: 'access' }, SECRET, 3600);
-  const refresh = signSession({ sub: 'alice', role: 'user', typ: 'refresh' }, SECRET, 3600);
+  const access = signSession({ fp: FP, typ: 'access' }, SECRET, 3600);
+  const refresh = signSession({ fp: FP, typ: 'refresh' }, SECRET, 3600);
   assert.ok(verifySession(access, SECRET, 'access'));
   assert.ok(verifySession(refresh, SECRET, 'refresh'));
   assert.equal(verifySession(refresh, SECRET, 'access'), null, 'a refresh token must not pass as access');
   assert.equal(verifySession(access, SECRET, 'refresh'), null, 'an access token must not pass as refresh');
-  const noTyp = signSession({ sub: 'alice', role: 'user' }, SECRET, 3600);
+  const noTyp = signSession({ fp: FP }, SECRET, 3600);
   assert.equal(verifySession(noTyp, SECRET, 'access'), null, 'a token with no typ must be rejected when a typ is expected');
   assert.ok(verifySession(noTyp, SECRET), 'no expected type still verifies a typ-less token');
 });
 
 test('verifySession rejects bad tokens', async (t) => {
-  const valid = signSession({ sub: 'alice', role: 'user' }, SECRET, 3600);
+  const valid = signSession({ fp: FP }, SECRET, 3600);
   const [body, sig] = valid.split('.');
   const flip = (s, ch) => (s[0] === ch ? ch + ch + s.slice(2) : ch + s.slice(1));
 
@@ -57,8 +59,8 @@ test('verifySession rejects bad tokens', async (t) => {
     { name: 'empty signature', token: body + '.' },
     { name: 'tampered body', token: flip(body, 'X') + '.' + sig },
     { name: 'tampered signature', token: body + '.' + flip(sig, 'X') },
-    { name: 'wrong secret', token: signSession({ sub: 'a', role: 'user' }, randomBytes(32), 3600) },
-    { name: 'expired via negative ttl', token: signSession({ sub: 'a', role: 'user' }, SECRET, -10) },
+    { name: 'wrong secret', token: signSession({ fp: FP }, randomBytes(32), 3600) },
+    { name: 'expired via negative ttl', token: signSession({ fp: FP }, SECRET, -10) },
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
@@ -69,22 +71,18 @@ test('verifySession rejects bad tokens', async (t) => {
 
 test('verifySession validates the payload even with a valid signature', async (t) => {
   const cases = [
-    { name: 'missing role', payload: { sub: 'a', exp: now() + 100 }, want: null },
-    { name: 'missing sub', payload: { role: 'user', exp: now() + 100 }, want: null },
-    { name: 'exp not a number', payload: { sub: 'a', role: 'user' }, want: null },
-    { name: 'exp in the past', payload: { sub: 'a', role: 'user', exp: now() - 10 }, want: null },
+    { name: 'missing fp', payload: { exp: now() + 100 }, want: null },
+    { name: 'non-string fp', payload: { fp: 12345, exp: now() + 100 }, want: null },
+    { name: 'exp not a number', payload: { fp: FP }, want: null },
+    { name: 'exp in the past', payload: { fp: FP, exp: now() - 10 }, want: null },
     { name: 'array payload', payload: [], want: null },
-    { name: 'well-formed', payload: { sub: 'a', role: 'user', exp: now() + 100 }, want: 'ok' },
+    { name: 'well-formed', payload: { fp: FP, exp: now() + 100 }, want: 'ok' },
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
       const got = verifySession(forge(c.payload, SECRET), SECRET);
-      if (c.want === 'ok') {
-        assert.equal(got.sub, 'a');
-        assert.equal(got.role, 'user');
-      } else {
-        assert.equal(got, null);
-      }
+      if (c.want === 'ok') assert.equal(got.fp, FP);
+      else assert.equal(got, null);
     });
   }
 });

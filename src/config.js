@@ -11,7 +11,6 @@ const DEFAULTS = {
     cwd: null,
     cols: 120,
     rows: 36,
-    autoRestartShell: false,
     env: {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
@@ -19,11 +18,18 @@ const DEFAULTS = {
       LC_ALL: 'en_US.UTF-8',
     },
   },
-  control: { mode: 'soft', staleControllerSeconds: 120, requestTimeoutSeconds: 60 },
-  buffer: { maxBytes: 2097152 },
-  usersFile: './users.json',
-  stateFile: './state.json',
+  authFile: './auth.json',
 };
+
+const SHELLS = ['zsh', 'bash', 'fish'];
+
+// An unknown name is a startup error, never a silent fallback: landing in the wrong shell reads as a broken config.
+export function resolveShell(name) {
+  if (!SHELLS.includes(name)) {
+    throw new Error(`--shell must be one of ${SHELLS.join(', ')}; set terminal.shell in config.json for anything else`);
+  }
+  return `/usr/bin/env ${name} -l`;
+}
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -79,7 +85,7 @@ export function loadConfig() {
 
   const cfg = deepMerge(structuredClone(DEFAULTS), user);
 
-  for (const sec of ['listen', 'cookie', 'terminal', 'control', 'buffer']) {
+  for (const sec of ['listen', 'cookie', 'terminal']) {
     check(isPlainObject(cfg[sec]), sec + ' must be an object');
   }
 
@@ -97,19 +103,6 @@ export function loadConfig() {
   );
   check(Number.isInteger(cfg.terminal.cols) && cfg.terminal.cols >= 1, 'terminal.cols must be an integer >= 1');
   check(Number.isInteger(cfg.terminal.rows) && cfg.terminal.rows >= 1, 'terminal.rows must be an integer >= 1');
-  check(cfg.control.mode === 'fast' || cfg.control.mode === 'soft', "control.mode must be 'fast' or 'soft'");
-  check(
-    Number.isInteger(cfg.control.staleControllerSeconds) && cfg.control.staleControllerSeconds >= 1,
-    'control.staleControllerSeconds must be an integer >= 1'
-  );
-  check(
-    Number.isInteger(cfg.control.requestTimeoutSeconds) && cfg.control.requestTimeoutSeconds >= 1,
-    'control.requestTimeoutSeconds must be an integer >= 1'
-  );
-  check(
-    Number.isInteger(cfg.buffer.maxBytes) && cfg.buffer.maxBytes >= 65536,
-    'buffer.maxBytes must be an integer >= 65536'
-  );
   // Cap it: the refresh setTimeout (~accessTtl*1000 ms) hot-loops /refresh if it exceeds Node's ~24.85-day timer limit and clamps to ~1ms.
   check(
     Number.isInteger(cfg.cookie.accessTtlSeconds) && cfg.cookie.accessTtlSeconds >= 60 && cfg.cookie.accessTtlSeconds <= 604800,
@@ -127,38 +120,7 @@ export function loadConfig() {
 
   if (cfg.terminal.cwd == null) cfg.terminal.cwd = process.env.HOME || process.cwd();
 
-  cfg.usersFile = path.resolve(dir, cfg.usersFile);
-  cfg.stateFile = path.resolve(dir, cfg.stateFile);
+  cfg.authFile = path.resolve(dir, cfg.authFile);
 
   return cfg;
-}
-
-function writeStateFile(stateFile, state) {
-  atomicWriteFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', 0o600);
-}
-
-export function loadState(stateFile) {
-  let raw;
-  try {
-    raw = readFileSync(stateFile, 'utf8');
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw new Error(`cannot read state file ${stateFile}: ${e.message}`);
-    mkdirSync(path.dirname(stateFile), { recursive: true });
-    writeStateFile(stateFile, { mode: null });
-    return { mode: null };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`invalid JSON in state file ${stateFile}: ${e.message}`);
-  }
-  if (!isPlainObject(parsed)) return { mode: null };
-  // Narrow to the same enum loadConfig enforces so a tampered state file can't inject a trusted mode.
-  const m = parsed.mode;
-  return { mode: m === 'fast' || m === 'soft' ? m : null };
-}
-
-export function saveState(stateFile, state) {
-  writeStateFile(stateFile, state);
 }

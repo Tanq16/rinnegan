@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  // Catppuccin Mocha — values must match the team's kitty config (see README).
+  // Catppuccin Mocha — values must match the kitty config (see README).
   const THEME = {
     background: '#1e1e2e',
     foreground: '#cdd6f4',
@@ -33,7 +33,8 @@
   const REFRESH_TIMEOUT_MS = 10000; // a hung /refresh must not strand the socket with no reconnect pending
   const STATE_CHECK_MS = 60000; // periodic UX check; the server's slide is the real keep-alive
   const PROBE_FONT_PX = 16; // matches #probe font-size in styles.css
-  const DEFAULT_FONT = 16; // fixed render size, both modes; browser zoom is the scaling control
+  const DEFAULT_FONT = 16; // fixed render size; browser zoom is the scaling control
+  const FALLBACK_GRID = { cols: 80, rows: 24 }; // only until the first `started` frame lands
   const RESIZE_MS = 200;
   const KEY_SEQS = { 'esc': '\x1b', 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a' };
   // US-layout [unshifted, shifted] chars per ev.code, for Alt-as-Escape (M-= etc.)
@@ -49,20 +50,11 @@
   const els = {
     stage: $('stage'), terminal: $('terminal'), probe: $('probe'),
     toggle: $('control-toggle'), panel: $('panel'),
-    pUser: $('p-user'), pViewers: $('p-viewers'), pController: $('p-controller'),
-    pPending: $('p-pending'), pMode: $('p-mode'), pStatus: $('p-status'),
-    takeBtn: $('take-btn'), releaseBtn: $('release-btn'),
-    pSession: $('p-session'), sessionBtn: $('session-btn'), leaveBtn: $('leave-btn'), sessionBadge: $('session-badge'),
+    pHost: $('p-host'), pPlatform: $('p-platform'), pHostUser: $('p-hostuser'),
+    pShell: $('p-shell'), pStatus: $('p-status'),
     altEsc: $('alt-esc'),
-    adminSection: $('admin-section'), modeSelect: $('mode-select'),
-    restartBtn: $('restart-btn'), kickBtn: $('kick-btn'),
-    requestBar: $('request-bar'), requestText: $('request-text'),
-    grantBtn: $('grant-btn'), denyBtn: $('deny-btn'),
-    endedBar: $('ended-bar'), endedRestart: $('ended-restart'),
     logoutForm: $('logout-form'),
-    overlay: $('overlay'), overlayMsg: $('overlay-msg'), reconnectBtn: $('reconnect-btn'),
-    chooser: $('chooser'), chooserNote: $('chooser-note'), chooserInfo: $('chooser-info'),
-    chooseShared: $('choose-shared'), chooseSplit: $('choose-split'),
+    exitCard: $('exit-card'), exitMsg: $('exit-msg'), exitNote: $('exit-note'), startBtn: $('start-btn'),
     uploadOpen: $('upload-open'), uploadModal: $('upload-modal'),
     uploadChooser: $('upload-chooser'),
     uploadClipboard: $('upload-clipboard'), uploadPick: $('upload-pick'),
@@ -86,37 +78,33 @@
   let reconnectTimer = null;
   let toastTimer = null;
   let backoffIdx = 0;
-  let me = { username: null, role: null };
-  let offerShared = false; // server tier: false ⇒ terminal-only lobby, no shared session or admin panel
   let authOn = true;
+  let host = {};
   let accessExpiresAt = null;
   let refreshTimer = null;
   let refreshRetry = 0;
   let recovering = false; // a refresh was already tried for this socket; a second 4401 backs off instead of retrying it
   let refreshStale = false; // /refresh has stopped landing: the socket still works but the session is on borrowed time
-  let grid = { cols: 120, rows: 36 };
-  let state = { controller: null, mode: 'soft', viewers: 0, pending: null };
-  let sess = 'lobby'; // this connection's session: 'lobby' | 'shared' | 'split' (own shell)
-  let lastSess = null; // null on page load lands at chooser; a dropped shared WS rejoins silently
-  let epoch = 0; // echoed in input/resize so the server drops keystrokes in flight across a session switch
-  let splitGrid = { cols: 0, rows: 0 }; // viewport-derived grid while split
+  let running = false;
+  let grid = { cols: 0, rows: 0 }; // viewport-derived grid of the running shell
+  let epoch = 0; // echoed in input/resize so the server drops keystrokes in flight across a restart
+  let startedOnce = false; // the first hello of a page load auto-starts; later ones are reconnects and must not
   let resizeTimer = null;
-  let splitEnded = false; // a splitExited arrived; the lobby chooser notes it
-  let replayLeft = 0; // bytes of buffer replay still expected after a mode frame
-  let replayGen = 0; // invalidates stale write-callbacks from a superseded replay
-  let clipboardArmed = false; // OSC 52 honored only for live output, not replay
   let transfer = null; // at most one upload in flight; null when idle
-
-  const isAdmin = () => me.role === 'admin';
-  const isController = () => me.username !== null && state.controller === me.username;
 
   function send(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
   const sendInput = (data) => {
-    if (sess === 'lobby') return; // lobby has no session to type into
+    if (!running) return;
     send({ t: 'input', data, e: epoch });
   };
+
+  function sendStart() {
+    running = false; // the server kills the current shell before spawning, so there is none until `started`
+    const want = computeNatural() || {}; // absent size: server falls back to config
+    send({ t: 'start', cols: want.cols, rows: want.rows });
+  }
 
   function connect() {
     clearTimeout(reconnectTimer);
@@ -136,14 +124,6 @@
     hbTimer = null;
     ws = null;
     if (ev.code === 4401) { setStatus('reconnecting'); recover4401(); return; }
-    if (ev.code === 4000) {
-      // an admin kick must land at the chooser on Reconnect, never silently rejoin shared
-      cancelRefresh();
-      lastSess = null;
-      setStatus('disconnected');
-      showOverlay('Disconnected by admin.');
-      return;
-    }
     retryConnect();
   }
 
@@ -220,28 +200,12 @@
     try { body = await res.json(); } catch {}
     if (!res.ok || typeof body?.accessExpiresAt !== 'number') return retryConnect();
     accessExpiresAt = body.accessExpiresAt;
-    lastSess = null; // genuinely gone: reconnect into the lobby, not a silent shared rejoin
     connect();
   }
 
   function onMessage(ev) {
     if (ev.data instanceof ArrayBuffer) {
-      if (term && sess !== 'lobby') { // lobby receives no PTY output
-        const bytes = new Uint8Array(ev.data);
-        if (replayLeft > 0) {
-          replayLeft -= bytes.byteLength;
-          if (replayLeft <= 0) {
-            // arm OSC 52 only after every replayed byte is parsed, and only if no newer replay superseded this one
-            const g = replayGen;
-            term.write(bytes, () => { if (g === replayGen) clipboardArmed = true; });
-          } else {
-            term.write(bytes);
-          }
-        } else {
-          term.write(bytes);
-        }
-        els.endedBar.hidden = true; // fresh output ⇒ shell is alive again
-      }
+      if (term) term.write(new Uint8Array(ev.data));
       return;
     }
     let msg;
@@ -250,119 +214,60 @@
       case 'hello':
         onHello(msg);
         break;
-      case 'size':
-        if (!term || sess !== 'shared') break; // only shared follows the min-grid
-        grid = { cols: msg.cols, rows: msg.rows };
-        term.resize(grid.cols, grid.rows);
-        fitShared();
+      case 'started':
+        onStarted(msg);
         break;
-      case 'mode':
-        onMode(msg);
-        break;
-      case 'splitExited':
-        splitEnded = true;
-        toast('shell exited');
-        break;
-      case 'splitError':
-        toast('split failed: ' + msg.msg);
-        break;
-      case 'state':
-        state = { controller: msg.controller, mode: msg.mode, viewers: msg.viewers, pending: msg.pending };
-        renderPanel();
-        break;
-      case 'request':
-        toast(msg.from + ' requests control');
-        break;
-      case 'ended':
-        if (sess !== 'shared') break; // shared shell state is invisible elsewhere
-        els.endedBar.hidden = false;
-        els.endedRestart.hidden = !isAdmin();
+      case 'exited':
+        epoch = msg.epoch; // keystrokes from before the exit carried the old epoch
+        running = false;
+        showExitCard('Shell exited (code ' + msg.code + ').', null);
         break;
       case 'error':
         toast(msg.msg);
+        // A failed spawn (a missing shell, most likely) leaves the socket with nothing; the card is the only way back.
+        if (!running) showExitCard('No shell running.', msg.msg);
         break;
     }
   }
 
-  // Suppress OSC 52 until the shared replay is consumed (see the binary branch of onMessage).
-  function armReplay(bufferBytes) {
-    replayGen++; // a still-parsing older replay must not re-arm the clipboard
-    replayLeft = bufferBytes;
-    clipboardArmed = replayLeft === 0;
-  }
-
   function onHello(msg) {
-    me = msg.you;
-    offerShared = msg.offerShared === true;
     authOn = msg.authOn === true;
+    host = msg.host ?? {};
     accessExpiresAt = typeof msg.accessExpiresAt === 'number' ? msg.accessExpiresAt : null;
-    grid = { cols: msg.size.cols, rows: msg.size.rows };
-    state = msg.state;
-    sess = 'lobby'; // no replay follows hello
     epoch = msg.epoch;
+    running = false;
     clearTimeout(resizeTimer);
-    armReplay(0); // a replay interrupted by the reconnect must stay disarmed
     backoffIdx = 0;
     recovering = false;
-    hideOverlay();
-    els.endedBar.hidden = true;
     setStatus('connected');
-    if (!term) {
-      createTerminal();
-    } else {
-      term.reset(); // the shared mode reply's replay (if any) rebuilds the grid
-    }
-    if (offerShared && lastSess === 'shared') {
-      // silent rejoin after an auto-reconnect: the mode reply + replay restores the terminal, skipping the chooser
-      const want = computeNatural() || {}; // absent size: server uses config
-      send({ t: 'shared', cols: want.cols, rows: want.rows });
-      hideChooser();
-    } else {
-      showChooser(null);
-    }
+    if (!term) createTerminal();
+    else term.reset();
+    // A dropped socket took its shell with it, so a silent restart would hand back an empty shell as if nothing happened.
+    if (startedOnce) showExitCard('Disconnected.', 'the connection dropped, and its shell with it');
+    else { startedOnce = true; sendStart(); }
     resumeRefresh();
     renderPanel();
   }
 
-  function onMode(msg) {
+  function onStarted(msg) {
     if (!term) return;
-    epoch = msg.epoch; // keystrokes from before this frame carried the old epoch
+    epoch = msg.epoch;
     clearTimeout(resizeTimer);
     term.reset();
-    if (msg.mode === 'split') {
-      sess = 'split';
-      splitGrid = { cols: msg.cols, rows: msg.rows };
-      // own shell: live output only, no replay — OSC 52 is armed immediately
-      armReplay(0);
-      els.endedBar.hidden = true;
-      term.options.fontSize = DEFAULT_FONT;
-      term.resize(splitGrid.cols, splitGrid.rows);
-      hideChooser();
-      term.focus();
-    } else if (msg.mode === 'lobby') {
-      // split shell exited: back to the chooser, never auto-shared
-      sess = 'lobby';
-      armReplay(0);
-      els.endedBar.hidden = true;
-      showChooser(splitEnded ? 'shell exited' : null);
-    } else {
-      sess = 'shared';
-      grid = { cols: msg.cols, rows: msg.rows }; // the min-grid may have moved
-      term.resize(grid.cols, grid.rows);
-      fitShared();
-      armReplay(msg.bufferBytes);
-      hideChooser();
-      term.focus();
-    }
-    splitEnded = false;
-    lastSess = sess;
-    renderPanel();
+    running = true;
+    grid = { cols: msg.cols, rows: msg.rows };
+    term.options.fontSize = DEFAULT_FONT;
+    term.resize(grid.cols, grid.rows);
+    hideExitCard();
+    term.focus();
   }
 
   function createTerminal() {
+    // The server sizes the shell from computeNatural too, so this only has to survive until `started`.
+    const seed = computeNatural() || FALLBACK_GRID;
     term = new Terminal({
-      cols: grid.cols,
-      rows: grid.rows,
+      cols: seed.cols,
+      rows: seed.rows,
       fontFamily: "'JetBrains Mono', monospace",
       fontSize: DEFAULT_FONT,
       fontWeight: 400,
@@ -396,17 +301,17 @@
       }
       return true; // handled: never let the default handler enable blinking
     });
-    // OSC 52: honor WRITE/copy only (live output, see clipboardArmed); the "?" read form is consumed unanswered — answering would leak every viewer's clipboard to the shared shell.
+    // OSC 52: honor WRITE/copy only; the "?" read form is consumed unanswered, since answering would hand the shell the browser's clipboard.
     term.parser.registerOscHandler(52, (data) => {
       const payload = data.slice(data.indexOf(';') + 1);
-      if (!clipboardArmed || !payload || payload === '?') return true;
+      if (!payload || payload === '?') return true;
       try {
         const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
         navigator.clipboard.writeText(new TextDecoder().decode(bytes)).catch(() => {});
       } catch { /* malformed base64: drop */ }
       return true;
     });
-    term.onData(sendInput); // send always; server ignores non-controllers
+    term.onData(sendInput);
     term.attachCustomKeyEventHandler(altEscHandler);
     term.options.macOptionIsMeta = els.altEsc.checked;
     term.focus();
@@ -438,44 +343,14 @@
     };
   }
 
-  // Shared grid comes from the server — never resize it locally; render at DEFAULT_FONT letterboxed, stepping the font down only if the server grid transiently doesn't fit.
-  function fitShared() {
-    if (!term || sess !== 'shared') return;
-    const availW = els.stage.clientWidth - 16; // 2 × #stage padding
-    const availH = els.stage.clientHeight - 16;
-    const probe = els.probe.getBoundingClientRect();
-    if (!probe.width || !probe.height) return;
-    const cw = probe.width / 10 / PROBE_FONT_PX;
-    const ch = probe.height / PROBE_FONT_PX;
-    let f = Math.min(DEFAULT_FONT, availW / (grid.cols * cw), availH / (grid.rows * ch));
-    f = Math.max(8, f);
-    term.options.fontSize = f;
-    // xterm's cell metrics differ slightly from the probe's: step down past device-px rounding until it actually fits
-    const screen = els.terminal.querySelector('.xterm-screen');
-    if (screen) {
-      for (let i = 0; i < 40 && f > 8; i++, f -= 0.05) {
-        if (term.options.fontSize !== f) term.options.fontSize = f;
-        const m = screen.getBoundingClientRect();
-        if (m.width <= availW && m.height <= availH) break;
-      }
-    }
-  }
-
-  // Debounced viewport follow-up: split resizes its own PTY; shared reports its natural grid and the server answers only if the min-grid moved.
   function refitViewport() {
-    if (!term) return;
+    if (!term || !running) return;
     const want = computeNatural();
     if (!want) return;
-    if (sess === 'split') {
-      if (want.cols !== splitGrid.cols || want.rows !== splitGrid.rows) {
-        splitGrid = want;
-        term.resize(want.cols, want.rows);
-        send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch }); // own pty, no gate
-      }
-    } else if (sess === 'shared') {
-      send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch });
-      fitShared(); // re-letterbox while the report is in flight
-    }
+    if (want.cols === grid.cols && want.rows === grid.rows) return;
+    grid = want;
+    term.resize(want.cols, want.rows);
+    send({ t: 'resize', cols: want.cols, rows: want.rows, e: epoch });
   }
 
   function onViewportResize() {
@@ -484,51 +359,11 @@
   }
 
   function renderPanel() {
-    els.pUser.textContent = me.username ? me.username + ' (' + me.role + ')' : '–';
-    els.pViewers.textContent = String(state.viewers);
-    els.pController.textContent = state.controller ?? 'none';
-    els.pPending.textContent = state.pending ?? 'none';
-    els.pMode.textContent = state.mode;
-
-    const shared = sess === 'shared';
-    const split = sess === 'split';
-    els.pSession.textContent = split ? 'Terminal' : sess;
-    els.pSession.dataset.mode = sess;
-    els.sessionBtn.hidden = sess === 'lobby' || !offerShared;
-    els.sessionBtn.textContent = split ? 'Return to shared' : 'Terminal session';
-    els.leaveBtn.hidden = sess === 'lobby';
-    els.sessionBadge.hidden = !shared;
-
-    // input gating is shared-only: split is your own shell, lobby has no session
-    const ctrl = isController();
-    document.body.classList.toggle('readonly', shared && !ctrl);
-
-    els.takeBtn.hidden = ctrl || !shared; // take/request ignored from split and lobby
-    if (!ctrl) {
-      if (state.pending === me.username) {
-        els.takeBtn.disabled = true;
-        els.takeBtn.textContent = 'Request pending…';
-      } else {
-        els.takeBtn.disabled = false;
-        els.takeBtn.textContent = (state.mode === 'fast' || isAdmin()) ? 'Take Control' : 'Request Control';
-      }
-    }
-
-    const canRelease = ctrl || (isAdmin() && state.controller !== null);
-    els.releaseBtn.hidden = !canRelease;
-    els.releaseBtn.textContent = ctrl ? 'Release Control' : 'Force Release';
-
-    els.adminSection.hidden = !(isAdmin() && offerShared);
-    els.modeSelect.value = state.mode;
-    els.endedRestart.hidden = !isAdmin();
+    els.pHost.textContent = host.hostname ?? '–';
+    els.pPlatform.textContent = host.platform ?? '–';
+    els.pHostUser.textContent = host.user ?? '–';
+    els.pShell.textContent = host.shell ?? '–';
     els.logoutForm.hidden = !authOn;
-
-    els.chooserInfo.textContent = state.viewers + (state.viewers === 1 ? ' viewer' : ' viewers')
-      + ' · controller: ' + (state.controller ?? 'none');
-
-    const showReq = Boolean(state.pending) && state.pending !== me.username && (ctrl || isAdmin());
-    els.requestBar.hidden = !showReq;
-    if (showReq) els.requestText.textContent = state.pending + ' requests control';
   }
 
   function setStatus(s) {
@@ -543,26 +378,16 @@
     toastTimer = setTimeout(() => { els.toast.hidden = true; }, 4000);
   }
 
-  function showOverlay(msg) {
-    els.overlayMsg.textContent = msg;
-    els.overlay.hidden = false;
+  function showExitCard(msg, note) {
+    els.exitMsg.textContent = msg;
+    els.exitNote.textContent = note ?? '';
+    els.exitNote.hidden = !note;
+    els.exitCard.hidden = false;
+    els.startBtn.focus();
   }
 
-  function hideOverlay() {
-    els.overlay.hidden = true;
-  }
-
-  function showChooser(note) {
-    els.chooserNote.textContent = note ?? '';
-    els.chooserNote.hidden = !note;
-    els.chooseShared.hidden = !offerShared;
-    els.chooserInfo.hidden = !offerShared;
-    els.chooser.hidden = false;
-    (offerShared ? els.chooseShared : els.chooseSplit).focus();
-  }
-
-  function hideChooser() {
-    els.chooser.hidden = true;
+  function hideExitCard() {
+    els.exitCard.hidden = true;
   }
 
   function fmtBytes(n) {
@@ -805,32 +630,8 @@
       els.toggle.setAttribute('aria-expanded', String(open));
     });
 
-    els.takeBtn.addEventListener('click', () => {
-      if (state.mode === 'fast' || isAdmin()) send({ t: 'take' });
-      else send({ t: 'request' });
-    });
-    els.releaseBtn.addEventListener('click', () => send({ t: 'release' }));
-
-    els.chooseShared.addEventListener('click', () => {
-      const want = computeNatural() || {}; // absent size: server uses config
-      send({ t: 'shared', cols: want.cols, rows: want.rows });
-    });
-    els.chooseSplit.addEventListener('click', () => {
-      const want = computeNatural() || {};
-      send({ t: 'split', cols: want.cols, rows: want.rows });
-    });
-
-    els.sessionBtn.addEventListener('click', () => {
-      const want = computeNatural() || {}; // absent size: server uses config
-      if (sess === 'split') {
-        send({ t: 'shared', cols: want.cols, rows: want.rows });
-      } else if (sess === 'shared') {
-        send({ t: 'split', cols: want.cols, rows: want.rows });
-      }
-      if (term) term.focus();
-    });
-    // leaving: shared just detaches (the shell lives on server-side); split ends the split shell
-    els.leaveBtn.addEventListener('click', () => send({ t: 'lobby' }));
+    // No hide here: a spawn failure answers with `error`, and the card must stay up to be retried.
+    els.startBtn.addEventListener('click', sendStart);
 
     document.querySelectorAll('button.seq').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -841,18 +642,6 @@
     els.altEsc.addEventListener('change', () => {
       if (term) term.options.macOptionIsMeta = els.altEsc.checked;
     });
-
-    els.modeSelect.addEventListener('change', () => send({ t: 'mode', mode: els.modeSelect.value }));
-    els.restartBtn.addEventListener('click', () => send({ t: 'restart' }));
-    els.endedRestart.addEventListener('click', () => send({ t: 'restart' }));
-    els.kickBtn.addEventListener('click', () => {
-      if (confirm('Disconnect every viewer (including you)?')) send({ t: 'kickAll' });
-    });
-
-    els.grantBtn.addEventListener('click', () => {
-      if (state.pending) send({ t: 'grant', to: state.pending });
-    });
-    els.denyBtn.addEventListener('click', () => send({ t: 'deny' }));
 
     els.uploadOpen.addEventListener('click', openUploadModal);
     els.uploadCancel.addEventListener('click', closeUploadModal);
@@ -886,12 +675,6 @@
 
     els.downloadBtn.addEventListener('click', startDownload);
     els.downloadPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') startDownload(); });
-
-    els.reconnectBtn.addEventListener('click', () => {
-      hideOverlay();
-      backoffIdx = 0;
-      connect();
-    });
 
     window.addEventListener('resize', onViewportResize);
     document.fonts.ready.then(onViewportResize); // webfont metrics differ from fallback

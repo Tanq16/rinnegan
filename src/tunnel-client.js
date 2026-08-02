@@ -64,11 +64,11 @@ export function parseTunnelConfig(raw) {
   return { server: raw.server, mappings };
 }
 
-function login({ server, username, password, insecure }) {
+function login({ server, password, insecure }) {
   return new Promise((resolve, reject) => {
     const url = new URL('/login', server);
     const transport = url.protocol === 'https:' ? https : http;
-    const body = new URLSearchParams({ username, password }).toString();
+    const body = new URLSearchParams({ password }).toString();
     const req = transport.request(url, {
       method: 'POST',
       headers: {
@@ -80,7 +80,7 @@ function login({ server, username, password, insecure }) {
       res.resume();
       const cookie = cookieFromSetCookie(res.headers['set-cookie']);
       if (res.statusCode === 302 && cookie) resolve(cookie);
-      else reject(new Error(`login failed (status ${res.statusCode}); check username and password`));
+      else reject(new Error(`login failed (status ${res.statusCode}); check the password`));
     });
     req.on('error', reject);
     req.setTimeout(15000, () => req.destroy(new Error('login timed out')));
@@ -122,7 +122,7 @@ function pipe(ws, socket, remote, refreshCookie) {
   socket.on('error', teardown);
 }
 
-export async function runTunnels({ server, mappings, username, password, insecure }) {
+export async function runTunnels({ server, mappings, password, insecure }) {
   if (!Array.isArray(mappings) || mappings.length === 0) throw new Error('no port mappings to forward');
   const normalized = mappings.map(({ local, remote }) => {
     const l = validatePort(local);
@@ -132,11 +132,11 @@ export async function runTunnels({ server, mappings, username, password, insecur
     return { local: l, remote: r };
   });
 
-  const session = { cookie: await login({ server, username, password, insecure }) };
+  const session = { cookie: await login({ server, password, insecure }) };
   let refreshing = null;
   function refreshCookie() {
     if (!refreshing) {
-      refreshing = login({ server, username, password, insecure })
+      refreshing = login({ server, password, insecure })
         .then((c) => { session.cookie = c; info('tunnel session refreshed'); })
         .catch((e) => error(`re-login failed: ${e.message}`))
         .finally(() => { refreshing = null; });
@@ -156,7 +156,7 @@ export async function runTunnels({ server, mappings, username, password, insecur
         listener.once('error', reject);
         listener.listen(local, '127.0.0.1', resolve);
       });
-      info(`forwarding localhost:${local} -> server localhost:${remote} (authenticated as ${username})`);
+      info(`forwarding localhost:${local} -> server localhost:${remote}`);
       listeners.push(listener);
     }
   } catch (e) {
@@ -166,9 +166,9 @@ export async function runTunnels({ server, mappings, username, password, insecur
   return listeners;
 }
 
-export async function runTunnel({ server, localPort, remotePort, username, password, insecure }) {
+export async function runTunnel({ server, localPort, remotePort, password, insecure }) {
   const [listener] = await runTunnels({
-    server, username, password, insecure,
+    server, password, insecure,
     mappings: [{ local: localPort, remote: remotePort }],
   });
   return listener;
