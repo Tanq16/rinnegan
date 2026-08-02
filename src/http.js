@@ -55,7 +55,12 @@ function unauthorized(res) {
   res.end('auth required');
 }
 
-export function createHttpServer({ authenticate, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
+function notFound(res) {
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('not found');
+}
+
+export function createHttpServer({ authenticate, authOn, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
   async function handleLogin(req, res) {
     const body = await readBody(req, MAX_LOGIN_BODY);
     if (body === null) {
@@ -64,8 +69,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return;
     }
     const params = new URLSearchParams(body);
-    const user = await login(params.get('username') ?? '', params.get('password') ?? '');
-    if (user) return redirect(res, '/', makeSessionCookie(user));
+    const session = await login(params.get('password') ?? '');
+    if (session) return redirect(res, '/', makeSessionCookie(session));
     return redirect(res, '/login?error=1');
   }
 
@@ -98,6 +103,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
     }
 
     if (pathname === '/login') {
+      // Unrouted without auth: there is no password to check, so a POST would only burn a file read and a scrypt derivation per request.
+      if (!authOn) return notFound(res);
       if (method === 'GET') {
         if (authenticate(req)) return redirect(res, '/');
         return serveStatic(req, res, publicDir, '/login.html');
@@ -107,6 +114,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
     }
 
     if (pathname === '/logout') {
+      if (!authOn) return notFound(res);
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return redirect(res, '/login', clearSessionCookie());
     }
@@ -118,9 +126,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
 
     if (pathname === '/upload') {
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      const user = authenticate(req);
-      if (!user) return unauthorized(res);
-      return handleUpload(req, res, searchParams, user.username);
+      if (!authenticate(req)) return unauthorized(res);
+      return handleUpload(req, res, searchParams);
     }
 
     if (pathname === '/upload/batch') {
@@ -131,9 +138,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
 
     if (pathname === '/download') {
       if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
-      const user = authenticate(req);
-      if (!user) return unauthorized(res);
-      return handleDownload(req, res, searchParams, user.username);
+      if (!authenticate(req)) return unauthorized(res);
+      return handleDownload(req, res, searchParams);
     }
 
     if (pathname === '/styles.css' || pathname === '/app.js' || pathname === '/logo.svg' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {
@@ -141,8 +147,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return serveStatic(req, res, publicDir, pathname);
     }
 
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('not found');
+    return notFound(res);
   }
 
   return createServer((req, res) => {

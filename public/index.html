@@ -12,37 +12,22 @@
   <script defer src="/vendor/addon-webgl.js"></script>
   <script defer src="/app.js"></script>
 </head>
-<body class="term-page readonly">
+<body>
   <div id="stage"><div id="terminal"></div></div>
   <span id="probe" aria-hidden="true">WWWWWWWWWW</span>
 
   <button id="control-toggle" type="button" aria-expanded="false" aria-controls="panel">Control</button>
-  <span id="session-badge" hidden title="Shared session: the canonical grid everyone sees">shared</span>
 
   <aside id="panel">
     <dl class="facts">
-      <div><dt>You</dt><dd id="p-user">&ndash;</dd></div>
-      <div><dt>Viewers</dt><dd id="p-viewers">&ndash;</dd></div>
-      <div><dt>Controller</dt><dd id="p-controller">&ndash;</dd></div>
-      <div><dt>Pending</dt><dd id="p-pending">&ndash;</dd></div>
-      <div><dt>Mode</dt><dd id="p-mode">&ndash;</dd></div>
+      <div><dt>Host</dt><dd id="p-host">&ndash;</dd></div>
+      <div><dt>Platform</dt><dd id="p-platform">&ndash;</dd></div>
+      <div><dt>User</dt><dd id="p-hostuser">&ndash;</dd></div>
+      <div><dt>Shell</dt><dd id="p-shell">&ndash;</dd></div>
       <div><dt>Link</dt><dd id="p-status" data-state="connecting">connecting</dd></div>
     </dl>
-
-    <div class="row">
-      <button id="take-btn" type="button">Request Control</button>
-      <button id="release-btn" type="button" hidden>Release Control</button>
-    </div>
-
-    <section id="session-section">
-      <h3>Session <span id="p-session">shared</span></h3>
-      <div class="row">
-        <button id="session-btn" type="button">Terminal session</button>
-        <button id="leave-btn" type="button" title="Detach and return to the session chooser">Leave session</button>
-      </div>
-      <p class="hint">Your own terminal session on the same box &mdash; not a sandbox &mdash;
-        and it ends when you leave. Start tmux inside it to keep work between visits.</p>
-    </section>
+    <p class="hint">A real shell on this box &mdash; not a sandbox &mdash; and it dies with the
+      connection. Start tmux inside it to keep work across drops and visits.</p>
 
     <section id="upload-section">
       <h3>Files</h3>
@@ -70,44 +55,17 @@
       <label class="check"><input type="checkbox" id="alt-esc" checked> Alt sends Escape</label>
     </section>
 
-    <section id="admin-section" hidden>
-      <h3>Admin</h3>
-      <label class="check">Mode
-        <select id="mode-select">
-          <option value="soft">soft</option>
-          <option value="fast">fast</option>
-        </select>
-      </label>
-      <div class="row">
-        <button id="restart-btn" type="button">Restart Shell</button>
-        <button id="kick-btn" type="button" class="danger">Kick All</button>
-      </div>
-    </section>
-
     <form method="post" action="/logout" id="logout-form"><button type="submit">Log out</button></form>
   </aside>
 
-  <div id="request-bar" hidden>
-    <span id="request-text"></span>
-    <button id="grant-btn" type="button">Grant</button>
-    <button id="deny-btn" type="button">Deny</button>
-  </div>
-
-  <div id="ended-bar" hidden>
-    <span>Shell exited.</span>
-    <button id="ended-restart" type="button" hidden>Restart Shell</button>
-  </div>
-
-  <div id="chooser" hidden>
-    <div class="overlay-card chooser-card">
+  <div id="exit-card" hidden>
+    <div class="overlay-card exit-card">
       <h1>rinnegan</h1>
-      <p id="chooser-note" hidden></p>
+      <p id="exit-msg"></p>
+      <p id="exit-note" hidden></p>
       <div class="chooser-buttons">
-        <button id="choose-shared" type="button">Shared session</button>
-        <button id="choose-split" type="button"
-          title="Your own terminal session on the same box &mdash; not a sandbox &mdash; it ends when you leave">Terminal session</button>
+        <button id="start-btn" type="button">Start new shell</button>
       </div>
-      <p id="chooser-info"></p>
     </div>
   </div>
 
@@ -143,13 +101,6 @@
       </div>
       <input id="upload-file" type="file" multiple hidden>
       <input id="upload-folder" type="file" webkitdirectory hidden>
-    </div>
-  </div>
-
-  <div id="overlay" hidden>
-    <div class="overlay-card">
-      <p id="overlay-msg"></p>
-      <button id="reconnect-btn" type="button">Reconnect</button>
     </div>
   </div>
 

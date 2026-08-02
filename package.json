@@ -1,7 +1,7 @@
 {
   "name": "rinnegan",
   "version": "0.1.0",
-  "description": "Self-contained, self-hosted shared web terminal for a small trusted team; distributed as per-platform tarballs bundling their own Node runtime.",
+  "description": "Self-contained, self-hosted password-protected web terminal with host file transfer and port tunnelling; distributed as per-platform tarballs bundling their own Node runtime.",
   "type": "module",
   "private": true,
   "license": "MIT",

@@ -120,7 +120,7 @@ async function streamToFile(req, dest) {
   }
 }
 
-export async function handleUpload(req, res, searchParams, username) {
+export async function handleUpload(req, res, searchParams) {
   let dest;
   if (searchParams.get('batch') !== null) {
     const batch = lookupBatch(searchParams.get('batch'));
@@ -141,7 +141,7 @@ export async function handleUpload(req, res, searchParams, username) {
     if (e.code === 'EEXIST') return conflict(res, 'a file already exists at that path');
     throw e;
   }
-  info('upload: ' + username + ' ' + dest);
+  info('upload: ' + dest);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ path: dest }));
 }

@@ -52,9 +52,8 @@ function hmac(payloadB64url, secret) {
 export function signSession(claims, secret, ttlSeconds) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    sub: claims.sub,
-    role: claims.role,
     typ: claims.typ,
+    fp: claims.fp,
     iat: now,
     exp: now + ttlSeconds,
     sid: randomBytes(8).toString('hex'),
@@ -74,7 +73,7 @@ export function verifySession(token, secret, expectedType) {
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!payload || typeof payload !== 'object') return null;
-    if (typeof payload.sub !== 'string' || typeof payload.role !== 'string') return null;
+    if (typeof payload.fp !== 'string') return null;
     if (typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) return null;
     if (expectedType !== undefined && payload.typ !== expectedType) return null;
     return payload;
