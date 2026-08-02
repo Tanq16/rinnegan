@@ -1,4 +1,3 @@
-/* Each block must declare the full token set: an omitted token silently inherits Mocha's, so a partial theme shows up as one wrong color rather than an error. */
 /* The status roles are deliberately not the ANSI slots of the same hue — Gruvbox's normal ANSI set is its dim one, legible in a terminal cell but muddy as UI text. */
 
 /* Mocha's values mirror the kitty config in cli-Productivity-Suite; changing them de-syncs the web terminal from the native one. */

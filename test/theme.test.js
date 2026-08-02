@@ -8,10 +8,10 @@ const HTML = readFileSync(fileURLToPath(new URL('../public/index.html', import.m
 
 const DEFAULT_THEME = 'mocha';
 // The tokens public/app.js reads out of the computed style to build the xterm palette; a missing one reaches xterm as ''.
-const ANSI = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+const ANSI_HUES = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
 const TERMINAL_TOKENS = [
   '--bg', '--fg', '--cursor', '--selection', '--on-selection',
-  ...ANSI.map((c) => '--' + c), ...ANSI.map((c) => '--bright-' + c),
+  ...ANSI_HUES.map((c) => '--' + c), ...ANSI_HUES.map((c) => '--bright-' + c),
 ];
 
 const themes = new Map();

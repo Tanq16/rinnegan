@@ -2,8 +2,8 @@
   'use strict';
 
   const THEME_KEY = 'rinnegan.theme'; // also hardcoded in the pre-paint bootstrap in index.html and login.html
-  const DEFAULT_THEME = 'mocha'; // the palette :root carries in styles.css
-  const ANSI = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+  const DEFAULT_THEME = 'mocha';
+  const ANSI_HUES = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
 
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
   const REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -251,7 +251,7 @@
       selectionBackground: v('selection'),
       selectionForeground: v('on-selection'),
     };
-    for (const c of ANSI) {
+    for (const c of ANSI_HUES) {
       theme[c] = v(c);
       theme['bright' + c[0].toUpperCase() + c.slice(1)] = v('bright-' + c);
     }
