@@ -1,31 +1,9 @@
 (() => {
   'use strict';
 
-  // Catppuccin Mocha — values must match the kitty config (see README).
-  const THEME = {
-    background: '#1e1e2e',
-    foreground: '#cdd6f4',
-    cursor: '#f5e0dc',
-    cursorAccent: '#1e1e2e',
-    selectionForeground: '#1e1e2e',
-    selectionBackground: '#f5e0dc',
-    black: '#45475a',
-    red: '#f38ba8',
-    green: '#a6e3a1',
-    yellow: '#f9e2af',
-    blue: '#89b4fa',
-    magenta: '#f5c2e7',
-    cyan: '#94e2d5',
-    white: '#bac2de',
-    brightBlack: '#585b70',
-    brightRed: '#f38ba8',
-    brightGreen: '#a6e3a1',
-    brightYellow: '#f9e2af',
-    brightBlue: '#89b4fa',
-    brightMagenta: '#f5c2e7',
-    brightCyan: '#94e2d5',
-    brightWhite: '#a6adc8',
-  };
+  const THEME_KEY = 'rinnegan.theme'; // also hardcoded in the pre-paint bootstrap in index.html and login.html
+  const DEFAULT_THEME = 'mocha'; // the palette :root carries in styles.css
+  const ANSI = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
 
   const BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
   const REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -69,6 +47,7 @@
     transferNoticeText: $('transfer-notice-text'), transferNoticePath: $('transfer-notice-path'),
     transferNoticeClose: $('transfer-notice-close'),
     downloadPath: $('download-path'), downloadBtn: $('download-btn'),
+    theme: $('theme'),
     toast: $('toast'),
   };
 
@@ -261,6 +240,30 @@
     onViewportResize(); // the auto-start races document.fonts.ready, so the size that spawned the shell may have been measured in the fallback face
   }
 
+  function termTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (name) => cs.getPropertyValue('--' + name).trim();
+    const theme = {
+      background: v('bg'),
+      foreground: v('fg'),
+      cursor: v('cursor'),
+      cursorAccent: v('bg'),
+      selectionBackground: v('selection'),
+      selectionForeground: v('on-selection'),
+    };
+    for (const c of ANSI) {
+      theme[c] = v(c);
+      theme['bright' + c[0].toUpperCase() + c.slice(1)] = v('bright-' + c);
+    }
+    return theme;
+  }
+
+  function applyTheme(name) {
+    document.documentElement.dataset.theme = name;
+    if (term) term.options.theme = termTheme();
+    try { localStorage.setItem(THEME_KEY, name); } catch {}
+  }
+
   function createTerminal() {
     // The server sizes the shell from computeNatural too, so this only has to survive until `started`.
     const seed = computeNatural() || FALLBACK_GRID;
@@ -277,7 +280,7 @@
       drawBoldTextInBrightColors: false, // kitty does not brighten bold; keep palettes identical
       scrollback: 5000,
       scrollSensitivity: 2,
-      theme: THEME,
+      theme: termTheme(),
     });
     term.open(els.terminal);
     try {
@@ -641,6 +644,10 @@
     els.altEsc.addEventListener('change', () => {
       if (term) term.options.macOptionIsMeta = els.altEsc.checked;
     });
+
+    els.theme.value = document.documentElement.dataset.theme;
+    if (!els.theme.value) applyTheme(DEFAULT_THEME); // assigning an unknown name leaves the select blank, so a dropped theme has to fall back
+    els.theme.addEventListener('change', () => applyTheme(els.theme.value));
 
     els.uploadOpen.addEventListener('click', openUploadModal);
     els.uploadCancel.addEventListener('click', closeUploadModal);
