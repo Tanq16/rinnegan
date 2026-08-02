@@ -39,8 +39,7 @@ export async function setPassword(authFile, password) {
   await rename(tmp, authFile);
 }
 
-// Keyed with the per-boot signing secret so a token carries nothing derived from the stored hash.
-// setPassword regenerates the salt, so rotating even to the same password changes this and invalidates every session.
+// Keyed with the per-boot signing secret so a token carries nothing derived from the stored hash; setPassword regenerates the salt, so rotating even to the same password moves this and invalidates every session.
 export function fingerprint(record, secret) {
   return createHmac('sha256', secret).update(String(record.hash)).digest('base64url').slice(0, 16);
 }

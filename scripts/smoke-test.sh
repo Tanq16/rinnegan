@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Proves a built tarball is self-contained: extract it, scrub node from PATH, and confirm node-pty
-# spawns and both the plain-HTTP server and the bundled-Caddy HTTPS front serve on the bundled runtime.
+# Proves a built tarball is self-contained: extract it, scrub node from PATH, and confirm node-pty spawns and both the plain-HTTP server and the bundled-Caddy HTTPS front serve on the bundled runtime.
 set -euo pipefail
 
 die() {
