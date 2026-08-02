@@ -6,7 +6,7 @@ const NOW = 1_000_000_000_000; // fixed ms so nowSec and the STALE/GRACE math ar
 const nowSec = Math.floor(NOW / 1000);
 const TTL = 10800;
 const FP = 'Zm9vYmFyMTIzNDU2';
-const makeMeta = (over = {}) => ({ fp: FP, lastSeen: NOW, deadline: nowSec + 1000, missedRefreshes: 0, ...over });
+const makeMeta = (over = {}) => ({ fp: FP, lastSeen: NOW, deadline: nowSec + 1000, missedRefreshes: 0, credentialFailures: 0, ...over });
 const same = () => FP;
 const rotated = () => 'cm90YXRlZDEyMzQ1';
 const notCalled = () => { throw new Error('currentFingerprint must not be called'); };
@@ -145,11 +145,32 @@ test('refreshMeta resets the counter and sets the deadline', () => {
 });
 
 test('evaluateSocketSafe', async (t) => {
-  await t.test('degrades a credential-read failure to ping and mutates nothing (never closes)', () => {
+  const boom = () => { throw new Error('auth file gone'); };
+
+  await t.test('a momentary credential-read failure degrades to ping without sliding or bumping the fuse', () => {
     const meta = makeMeta({ deadline: nowSec - 100 });
-    assert.equal(evaluateSocketSafe(meta, NOW, () => { throw new Error('boom'); }, TTL), 'ping');
+    assert.equal(evaluateSocketSafe(meta, NOW, boom, TTL), 'ping');
     assert.equal(meta.deadline, nowSec - 100, 'a swallowed credential failure must not slide the deadline');
-    assert.equal(meta.missedRefreshes, 0, 'a swallowed credential failure must not bump the counter');
+    assert.equal(meta.missedRefreshes, 0, 'a swallowed credential failure must not bump the refresh counter');
+    assert.equal(meta.credentialFailures, 1, 'the failure must count toward the fail-closed bound');
+  });
+
+  // The revocation gap: a deleted/corrupt auth file makes currentFingerprint throw every sweep; without a bound a past-deadline socket pinged forever and never closed.
+  await t.test('a persistent credential-read failure fails closed at the bound instead of pinging forever', () => {
+    const meta = makeMeta({ deadline: nowSec - 100 });
+    const actions = Array.from({ length: 6 }, () => evaluateSocketSafe(meta, NOW, boom, TTL));
+    assert.deepEqual(actions, ['ping', 'ping', 'ping', 'close', 'close', 'close']);
+    assert.equal(meta.deadline, nowSec - 100, 'the fail-closed path must not slide the deadline');
+    assert.equal(meta.missedRefreshes, 0, 'the fail-closed path must not bump the refresh counter');
+  });
+
+  await t.test('a completed read resets the count so an intermittent blip never accumulates to a close', () => {
+    const meta = makeMeta({ deadline: nowSec - 100 });
+    evaluateSocketSafe(meta, NOW, boom, TTL);
+    evaluateSocketSafe(meta, NOW, boom, TTL);
+    assert.equal(meta.credentialFailures, 2);
+    assert.equal(evaluateSocketSafe(meta, NOW, same, TTL), 'slide');
+    assert.equal(meta.credentialFailures, 0, 'a completed evaluation clears the failure count');
   });
 
   await t.test('forwards a normal decision unchanged', () => {
