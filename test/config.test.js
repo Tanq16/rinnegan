@@ -124,6 +124,9 @@ test('loadConfig validation boundaries', async (t) => {
     { name: 'cookie name token ok', over: { cookie: { name: 'good_name-1' } } },
     { name: 'cookie name with space rejected', over: { cookie: { name: 'bad name' } }, err: /cookie\.name/ },
     { name: 'cookie name with semicolon rejected', over: { cookie: { name: 'has;semi' } }, err: /cookie\.name/ },
+    // path.resolve throws a raw ERR_INVALID_ARG_TYPE on a non-string, so this must be caught by the validator first.
+    { name: 'non-string authFile rejected', over: { authFile: 42 }, err: /authFile/ },
+    { name: 'empty authFile rejected', over: { authFile: '  ' }, err: /authFile/ },
   ];
   for (const c of cases) {
     await t.test(c.name, () => {

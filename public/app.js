@@ -241,7 +241,6 @@
     recovering = false;
     setStatus('connected');
     if (!term) createTerminal();
-    else term.reset();
     // A dropped socket took its shell with it, so a silent restart would hand back an empty shell as if nothing happened.
     if (startedOnce) showExitCard('Disconnected.', 'the connection dropped, and its shell with it');
     else { startedOnce = true; sendStart(); }
@@ -252,7 +251,6 @@
   function onStarted(msg) {
     if (!term) return;
     epoch = msg.epoch;
-    clearTimeout(resizeTimer);
     term.reset();
     running = true;
     grid = { cols: msg.cols, rows: msg.rows };
@@ -260,6 +258,7 @@
     term.resize(grid.cols, grid.rows);
     hideExitCard();
     term.focus();
+    onViewportResize(); // the auto-start races document.fonts.ready, so the size that spawned the shell may have been measured in the fallback face
   }
 
   function createTerminal() {

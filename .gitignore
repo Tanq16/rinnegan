@@ -5,10 +5,9 @@ node_modules/
 # build output / release artifacts
 dist/
 
-# local dev runtime files (real config/users are generated into the tarball at build time)
+# local dev runtime files
 config.json
-users.json
-state.json
+auth.json
 caddy-data/
 
 # OS cruft

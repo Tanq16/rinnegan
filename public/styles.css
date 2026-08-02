@@ -36,8 +36,7 @@ button {
   padding: 4px 10px;
   cursor: pointer;
 }
-button:hover:not(:disabled) { border-color: var(--lavender); }
-button:disabled { opacity: .45; cursor: default; }
+button:hover { border-color: var(--lavender); }
 button.danger { color: var(--red); border-color: var(--red); }
 
 #stage {
@@ -114,7 +113,6 @@ button.danger { color: var(--red); border-color: var(--red); }
 #p-status[data-state="connecting"],
 #p-status[data-state="reconnecting"] { color: var(--yellow); }
 #p-status[data-state="stale"] { color: var(--peach); }
-#p-status[data-state="disconnected"] { color: var(--red); }
 
 .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
 label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }

@@ -118,12 +118,13 @@ export function start(cfg, flags = {}) {
           signSession({ fp, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
           { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
         );
-        terminal.touchAll(exp);
+        terminal.touchAll(fp, exp);
         return { setCookie, accessExpiresAt: exp };
       };
 
   const server = createHttpServer({
     authenticate,
+    authOn,
     login: async (password) => {
       const record = await verify(cfg.authFile, password);
       return record ? fingerprint(record, secret) : null;

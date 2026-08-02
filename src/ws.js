@@ -35,9 +35,11 @@ export function refreshMeta(meta, newExp) {
   meta.missedRefreshes = 0;
 }
 
-// One password means one identity, so any successful refresh re-arms every live socket.
-export function refreshAllSockets(sockets, newExp) {
-  for (const meta of sockets.values()) refreshMeta(meta, newExp);
+// Only sockets on the refreshed credential: re-arming a rotated-out socket would push its deadline past the fuse forever, so it would never reach the fingerprint check.
+export function refreshSockets(sockets, fp, newExp) {
+  for (const meta of sockets.values()) {
+    if (meta.fp === fp) refreshMeta(meta, newExp);
+  }
 }
 
 export function attachWebSocket({ config, authenticate, authOn, host, currentFingerprint }) {
@@ -70,7 +72,6 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
   function startPty(ws, meta, msg) {
     const cols = clampDim(msg.cols, config.terminal.cols, 20, 500);
     const rows = clampDim(msg.rows, config.terminal.rows, 5, 200);
-    meta.running = false;
     let p;
     try {
       p = spawnRawPty({
@@ -84,7 +85,6 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
       return send(ws, { t: 'error', msg: e.message });
     }
     meta.epoch++;
-    meta.running = true;
     meta.pty = p;
     meta.ptySubs = [
       p.onData((data) => {
@@ -96,7 +96,6 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
       p.onExit(({ exitCode }) => {
         if (meta.pty !== p) return;
         detachPty(meta);
-        meta.running = false;
         meta.epoch++;
         send(ws, { t: 'exited', code: exitCode, epoch: meta.epoch });
       }),
@@ -116,8 +115,7 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
 
     switch (msg.t) {
       case 'start':
-        // Detach before spawning: the epoch gates client input only, so a dead shell's subscriptions
-        // must be disposed synchronously or its exit lands on the replacement.
+        // Detach before spawning: startPty overwrites meta.ptySubs, so an undisposed onData would keep piping the dead shell's output into the socket after `started` reset the client's terminal.
         killPty(meta);
         startPty(ws, meta, msg);
         break;
@@ -148,7 +146,6 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
       lastSeen: Date.now(),
       deadline: typeof session.accessExp === 'number' ? session.accessExp : Infinity,
       missedRefreshes: 0,
-      running: false,
       epoch: 0,
       pty: null,
       ptySubs: [],
@@ -214,5 +211,5 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
     }
   }, PING_INTERVAL_MS);
 
-  return { handleUpgrade, touchAll: (newExp) => refreshAllSockets(sockets, newExp) };
+  return { handleUpgrade, touchAll: (fp, newExp) => refreshSockets(sockets, fp, newExp) };
 }

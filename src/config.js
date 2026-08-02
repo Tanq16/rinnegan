@@ -118,6 +118,11 @@ export function loadConfig() {
     'cookie.name must be a valid cookie token'
   );
 
+  check(
+    typeof cfg.authFile === 'string' && cfg.authFile.trim() !== '',
+    'authFile must be a non-empty string'
+  );
+
   if (cfg.terminal.cwd == null) cfg.terminal.cwd = process.env.HOME || process.cwd();
 
   cfg.authFile = path.resolve(dir, cfg.authFile);

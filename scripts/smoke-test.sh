@@ -55,7 +55,7 @@ fi
 
 cd "$APP_DIR"
 
-# serve now self-seeds config/state into ~/.config/rinnegan; sandbox HOME so it lands in the temp dir, never the real home.
+# serve self-seeds config.json into ~/.config/rinnegan; sandbox HOME so it lands in the temp dir, never the real home.
 SMOKE_HOME="$SMOKE_DIR/home"
 mkdir -p "$SMOKE_HOME"
 
@@ -86,7 +86,7 @@ t.onExit((e) => { clearTimeout(bail); process.exit(out.includes('pty-ok') && e.e
 fi
 echo "node-pty spawns a real PTY -> OK"
 
-# --no-auth boots headlessly with no seeded user; the scrubbed PATH proves the bundled runtime is used.
+# --no-auth boots headlessly with no seeded password; the scrubbed PATH proves the bundled runtime is used.
 env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
   ./bin/rinnegan serve --no-auth > server.log 2>&1 &
 SERVER_PID=$!

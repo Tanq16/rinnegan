@@ -55,7 +55,12 @@ function unauthorized(res) {
   res.end('auth required');
 }
 
-export function createHttpServer({ authenticate, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
+function notFound(res) {
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('not found');
+}
+
+export function createHttpServer({ authenticate, authOn, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
   async function handleLogin(req, res) {
     const body = await readBody(req, MAX_LOGIN_BODY);
     if (body === null) {
@@ -98,6 +103,8 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
     }
 
     if (pathname === '/login') {
+      // Unrouted without auth: there is no password to check, so a POST would only burn a file read and a scrypt derivation per request.
+      if (!authOn) return notFound(res);
       if (method === 'GET') {
         if (authenticate(req)) return redirect(res, '/');
         return serveStatic(req, res, publicDir, '/login.html');
@@ -107,6 +114,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
     }
 
     if (pathname === '/logout') {
+      if (!authOn) return notFound(res);
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return redirect(res, '/login', clearSessionCookie());
     }
@@ -139,8 +147,7 @@ export function createHttpServer({ authenticate, login, makeSessionCookie, clear
       return serveStatic(req, res, publicDir, pathname);
     }
 
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('not found');
+    return notFound(res);
   }
 
   return createServer((req, res) => {

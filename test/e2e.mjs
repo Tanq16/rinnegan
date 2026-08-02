@@ -7,6 +7,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pty from 'node-pty';
 import WebSocket from 'ws';
 import { hashPassword } from '../src/auth.js';
 import { setPassword } from '../src/password.js';
@@ -160,6 +161,31 @@ function startServer(homeDir, extraArgs = []) {
   return { child, ready, getStderr: () => stderr };
 }
 
+// `rinnegan passwd` refuses a non-TTY stdin, so driving it needs a real PTY rather than a pipe.
+function runPasswd(homeDir, password) {
+  const p = pty.spawn(process.execPath, [BIN, 'passwd'], {
+    name: 'xterm-256color', cols: 80, rows: 24, cwd: ROOT,
+    env: { ...process.env, HOME: homeDir },
+  });
+  let out = '';
+  let answered = 0;
+  const done = new Promise((resolve, reject) => {
+    p.onData((d) => {
+      out += d;
+      const prompts = (out.match(/assword: /g) || []).length;
+      while (answered < Math.min(2, prompts)) {
+        p.write(password + '\r');
+        answered++;
+      }
+    });
+    p.onExit(({ exitCode }) => {
+      if (exitCode === 0) resolve(out);
+      else reject(new Error(`passwd exited ${exitCode}\n--- passwd output ---\n${out}`));
+    });
+  });
+  return withTimeout(done, 15000, 'rinnegan passwd to finish');
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const s = net.createServer();
@@ -212,7 +238,7 @@ function assertHelloShape(msg, { authOn = true } = {}) {
   else assert.equal(msg.accessExpiresAt, null, 'a no-auth hello must carry a null accessExpiresAt');
 }
 
-async function withTempServer({ password, noAuth, shell, args = [] }, fn) {
+async function withTempServer({ password, noAuth, shell, seed, args = [] }, fn) {
   const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'webterm-tmp-'));
   const cfgDir = path.join(home, '.config', 'rinnegan');
   await fs.promises.mkdir(cfgDir, { recursive: true });
@@ -222,6 +248,7 @@ async function withTempServer({ password, noAuth, shell, args = [] }, fn) {
     await fs.promises.writeFile(authFile,
       JSON.stringify({ password: await hashPassword(password) }, null, 2) + '\n', { mode: 0o600 });
   }
+  if (seed) await seed({ home, cfgDir, authFile });
   const srv = startServer(home, noAuth ? ['--no-auth', ...args] : args);
   srv.authFile = authFile;
   try {
@@ -266,11 +293,32 @@ async function main() {
       });
     });
 
+    await check('passwd seeds auth.json where serve reads it, and that password logs in', async () => {
+      await withTempServer({
+        seed: async ({ home, authFile }) => {
+          await runPasswd(home, 'set-by-passwd');
+          const raw = await fs.promises.readFile(authFile, 'utf8');
+          assert.equal(typeof JSON.parse(raw).password?.hash, 'string', 'passwd must write a derived hash under "password"');
+          assert.ok(!raw.includes('set-by-passwd'), 'passwd must never store the plaintext');
+          assert.equal((await fs.promises.stat(authFile)).mode & 0o777, 0o600, 'auth.json must be owner-only');
+        },
+      }, async (srv) => {
+        const { port } = await withTimeout(srv.ready, 15000, 'server listening after passwd');
+        const cookie = await loginFor(port, 'set-by-passwd');
+        assert.ok(cookie.length > 'rinnegan='.length, 'the password set by passwd must log in');
+      });
+    });
+
     await check('serve --no-auth skips the login page and still serves a terminal', async () => {
       await withTempServer({ noAuth: true }, async (srv) => {
         const { port } = await withTimeout(srv.ready, 15000, 'no-auth server listening');
         const root = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
         assert.equal(root.status, 200, 'GET / must serve the SPA without a cookie under --no-auth');
+        // With no password to check, a login POST would only cost a file read and a scrypt derivation.
+        for (const [path, init] of [['/login', {}], ['/login', { method: 'POST', body: 'password=x' }], ['/logout', { method: 'POST' }]]) {
+          const res = await fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual', ...init });
+          assert.equal(res.status, 404, `${init.method ?? 'GET'} ${path} must be unrouted under --no-auth`);
+        }
         const c = new WSClient(`ws://127.0.0.1:${port}/ws`, null);
         try {
           assertHelloShape(await c.nextText(5000, 'no-auth hello'), { authOn: false });
@@ -359,9 +407,15 @@ async function main() {
         await setPassword(srv.authFile, 'a-brand-new-password');
         const after = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
         assert.equal(after.status, 401, 'a rotated password must stop the old session refreshing');
-        // and the new password mints a session that does refresh
-        const fresh = await loginFor(port, 'a-brand-new-password');
-        assert.ok(fresh.length > 'rinnegan='.length, 'the new password must log in');
+        const freshLogin = await fetch(`http://127.0.0.1:${port}/login`, {
+          method: 'POST',
+          redirect: 'manual',
+          body: new URLSearchParams({ password: 'a-brand-new-password' }),
+        });
+        assert.equal(freshLogin.status, 302, 'the new password must log in');
+        const freshRefresh = getCookiePair(freshLogin, 'rinnegan_rt').split(';')[0];
+        const renewed = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: freshRefresh } });
+        assert.equal(renewed.status, 200, 'a session minted after the rotation must refresh against the new fingerprint');
       });
     });
 
@@ -655,7 +709,9 @@ async function main() {
       const textCount = ec.texts.length;
       await sleep(800);
       assert.equal(ec.bin.length, binCount, 'no output may follow the exit');
-      assert.ok(!ec.texts.slice(textCount).some((x) => x.t === 'started'), 'nothing may auto-restart server-side');
+      const after = ec.texts.slice(textCount);
+      assert.ok(!after.some((x) => x.t === 'started'), 'nothing may auto-restart server-side');
+      assert.ok(!after.some((x) => x.t === 'exited'), 'the exit must be reported exactly once');
 
       const second = await ec.start(100, 30);
       assert.ok(second.epoch > exited.epoch, 'a start after the exit must bump the epoch again');

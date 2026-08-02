@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateSocket, evaluateSocketSafe, refreshMeta, refreshAllSockets } from '../src/ws.js';
+import { evaluateSocket, evaluateSocketSafe, refreshMeta, refreshSockets } from '../src/ws.js';
 
 const NOW = 1_000_000_000_000; // fixed ms so nowSec and the STALE/GRACE math are exact
 const nowSec = Math.floor(NOW / 1000);
@@ -159,16 +159,31 @@ test('evaluateSocketSafe', async (t) => {
   });
 });
 
-// One password means one identity: a refresh proves it for every socket at once.
-test('refreshAllSockets re-arms every socket', () => {
-  const metas = [
-    { deadline: 1, missedRefreshes: 3 },
-    { deadline: 2, missedRefreshes: 0 },
-    { deadline: 3, missedRefreshes: 4 },
-  ];
-  refreshAllSockets(new Map(metas.map((m, i) => [`ws-${i}`, m])), 999);
-  for (const m of metas) {
-    assert.equal(m.deadline, 999);
-    assert.equal(m.missedRefreshes, 0);
-  }
+const ROTATED = rotated();
+
+test('refreshSockets', async (t) => {
+  await t.test('re-arms every socket on the refreshed credential', () => {
+    const metas = [
+      { fp: FP, deadline: 1, missedRefreshes: 3 },
+      { fp: FP, deadline: 2, missedRefreshes: 0 },
+    ];
+    refreshSockets(new Map(metas.map((m, i) => [`ws-${i}`, m])), FP, 999);
+    for (const m of metas) {
+      assert.equal(m.deadline, 999);
+      assert.equal(m.missedRefreshes, 0);
+    }
+  });
+
+  await t.test('leaves a rotated-out socket untouched', () => {
+    const meta = { fp: ROTATED, deadline: 2, missedRefreshes: 4 };
+    refreshSockets(new Map([['ws-0', meta]]), FP, 999);
+    assert.deepEqual(meta, { fp: ROTATED, deadline: 2, missedRefreshes: 4 });
+  });
+
+  // The revocation path: without the fp filter another session's refresh slides this deadline forever and the fuse never reaches the fingerprint check.
+  await t.test('a rotated-out socket still closes after someone else refreshes', () => {
+    const meta = makeMeta({ fp: ROTATED, deadline: nowSec - 61 });
+    refreshSockets(new Map([['ws-0', meta]]), FP, nowSec + TTL);
+    assert.equal(evaluateSocket(meta, NOW, same, TTL), 'close');
+  });
 });

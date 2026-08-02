@@ -55,7 +55,7 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan passwd
 ```
 
-Then open **http://127.0.0.1:8442** and log in. There are no accounts and no usernames: one password guards the box, and changing it logs every existing session out. `passwd` takes effect on a running server without a restart.
+Then open **http://127.0.0.1:8442** and log in. There are no accounts and no usernames: one password guards the box, and changing it revokes every existing session within one access-TTL. `passwd` takes effect on a running server without a restart.
 
 | Setup | On boot | You get |
 | ----- | ------- | ------- |
