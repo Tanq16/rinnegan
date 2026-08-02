@@ -107,10 +107,10 @@ done
 [ "$ROOT_CODE" = "200" ] || { echo "GET / expected 200 but got '$ROOT_CODE'; log:"; cat server.log || true; exit 1; }
 echo "GET / -> 200 OK (--no-auth)"
 
-# The synthetic session is always present under --no-auth, so /login redirects to /.
+# There is no password to check under --no-auth, so /login is unrouted rather than redirecting.
 LOGIN_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8442/login || true)"
-[ "$LOGIN_CODE" = "302" ] || { echo "GET /login expected 302 but got '$LOGIN_CODE'; log:"; cat server.log || true; exit 1; }
-echo "GET /login -> 302 OK (--no-auth)"
+[ "$LOGIN_CODE" = "404" ] || { echo "GET /login expected 404 but got '$LOGIN_CODE'; log:"; cat server.log || true; exit 1; }
+echo "GET /login -> 404 OK (--no-auth)"
 
 # The --https server also binds 8442, so stop the HTTP-only server first to free the port.
 kill "$SERVER_PID" 2>/dev/null || true
@@ -135,7 +135,7 @@ done
 [ "$HTTPS_ROOT_CODE" = "200" ] || { echo "HTTPS GET / expected 200 but got '$HTTPS_ROOT_CODE'; log:"; cat https.log || true; exit 1; }
 
 HTTPS_LOGIN_CODE="$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/login || true)"
-[ "$HTTPS_LOGIN_CODE" = "302" ] || { echo "HTTPS GET /login expected 302 but got '$HTTPS_LOGIN_CODE'; log:"; cat https.log || true; exit 1; }
-echo "HTTPS via bundled Caddy -> 200/302 OK"
+[ "$HTTPS_LOGIN_CODE" = "404" ] || { echo "HTTPS GET /login expected 404 but got '$HTTPS_LOGIN_CODE'; log:"; cat https.log || true; exit 1; }
+echo "HTTPS via bundled Caddy -> 200/404 OK"
 
 echo "Smoke test passed for $BUNDLE_NAME"
