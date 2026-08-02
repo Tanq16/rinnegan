@@ -155,12 +155,12 @@ button.danger { color: var(--err); border-color: var(--err); }
   right: 6px;
   z-index: 30;
   background: var(--inset);
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 5px;
   border-radius: 5px;
   opacity: .35; /* unobtrusive over the terminal until needed */
   transition: opacity .15s ease;
 }
+#control-toggle svg { display: block; }
 #control-toggle:hover,
 #control-toggle:focus-visible,
 #control-toggle[aria-expanded="true"] { opacity: 1; }
