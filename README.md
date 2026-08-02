@@ -22,6 +22,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a terminal fron
 - **Password in, shell out** — one field on the login page, then a real interactive shell sized to your browser window, streamed over WebSocket.
 - **A shell per connection** — spawned on demand, killed with the socket; no server-owned always-on PTY. Durability is tmux's job. See [Terminal](#terminal).
 - **Pick your shell** — `--shell zsh|bash|fish`, or any command string via `terminal.shell`. See [CLI](#cli).
+- **Eight color schemes** — Catppuccin Mocha/Latte, Gruvbox Dark/Light, Dracula, Nord, One Dark, and Tokyo Night, switched from the control panel and remembered per browser. See [Theme and fonts](#theme-and-fonts).
 - **Authenticated port tunnel** — forward your `localhost:<port>` to a `localhost` port on the server over an authenticated WebSocket (`rinnegan tunnel`) — `ssh -L` without SSH. See [CLI](#cli).
 - **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
 - **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
@@ -146,8 +147,9 @@ Bytes are streamed to disk with a `POST`, with **no size cap** and a live progre
 
 ### Theme and fonts
 
-- **Palette:** Catppuccin Mocha, hex values taken from the kitty config in [`Tanq16/cli-Productivity-Suite`](https://github.com/Tanq16/cli-Productivity-Suite) so the web terminal matches the native setup. Bold cells are not brightened (matching kitty); true 24-bit color is enabled end to end. Baked in, not configurable.
-- **Cursor:** locked to a steady rosewater beam (kitty's `cursor_shape beam`, no blink) — OSC 10/11/12 color escapes are filtered and DECSCUSR blink bits stripped, so nothing run in the shell can recolor it or make it blink.
+- **Themes:** eight schemes in the control panel's **Theme** dropdown — Catppuccin Mocha (the default) and Latte, Gruvbox Dark and Light, Dracula, Nord, One Dark, and Tokyo Night. Each one recolors the page and the terminal's ANSI palette together, and the choice is remembered in the browser's `localStorage` — it is per-browser, not a server setting, so two people on the same rinnegan can run different themes. Programs inside the shell carry their own colors, so a vim or tmux colorscheme does not follow the dropdown.
+- **Palette:** Mocha's hex values are taken from the kitty config in [`Tanq16/cli-Productivity-Suite`](https://github.com/Tanq16/cli-Productivity-Suite) so the web terminal matches the native setup; the rest reproduce their upstream schemes, including their contrast quirks (Catppuccin Latte's yellow is genuinely low-contrast on its own background — that is Latte, not a bug). Bold cells are not brightened (matching kitty); true 24-bit color is enabled end to end.
+- **Cursor:** locked to a steady beam in the active theme's cursor color (kitty's `cursor_shape beam`, no blink) — OSC 10/11/12 color escapes are filtered and DECSCUSR blink bits stripped, so nothing run in the shell can recolor it or make it blink.
 - **Fonts:** terminal in **JetBrains Mono Nerd Font Mono** (single-cell "Mono" variant, 400/700), UI in **Inter** (400/600), both bundled as woff2 with a `monospace` fallback. All font files are committed and shipped in every tarball, so no font tooling is needed to build or run.
 - **Rendering:** GPU-accelerated via xterm's WebGL renderer, falling back to the DOM renderer when WebGL2 is unavailable — keeps full-screen TUI repaints (scrolling inside `tmux`, editors, or other TUIs) smooth.
 

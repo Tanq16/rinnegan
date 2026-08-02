@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Rinnegan</title>
+  <!-- Inline and here: applying the stored theme from the deferred app.js instead would paint the default first. -->
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem('rinnegan.theme') || 'mocha'; } catch {}</script>
   <link rel="stylesheet" href="/css/inter.css">
   <link rel="stylesheet" href="/css/jetbrains-mono.css">
   <link rel="stylesheet" href="/vendor/xterm.css">
@@ -53,6 +55,22 @@
         <button type="button" class="seq" data-seq="ctrl-z">Ctrl-Z</button>
       </div>
       <label class="check"><input type="checkbox" id="alt-esc" checked> Alt sends Escape</label>
+    </section>
+
+    <section>
+      <h3>Theme</h3>
+      <select id="theme">
+        <option value="mocha">Catppuccin Mocha</option>
+        <option value="latte">Catppuccin Latte</option>
+        <option value="gruvbox-dark">Gruvbox Dark</option>
+        <option value="gruvbox-light">Gruvbox Light</option>
+        <option value="dracula">Dracula</option>
+        <option value="nord">Nord</option>
+        <option value="one-dark">One Dark</option>
+        <option value="tokyo-night">Tokyo Night</option>
+      </select>
+      <p class="hint">Recolors the page and the terminal palette. Remembered in this browser
+        &mdash; programs running inside the shell keep their own colors.</p>
     </section>
 
     <form method="post" action="/logout" id="logout-form"><button type="submit">Log out</button></form>
