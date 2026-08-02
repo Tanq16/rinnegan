@@ -340,8 +340,8 @@
     const cellW = (probe.width / 10 / PROBE_FONT_PX) * DEFAULT_FONT;
     const cellH = (probe.height / PROBE_FONT_PX) * DEFAULT_FONT;
     return {
-      cols: Math.max(20, Math.min(500, Math.floor((els.stage.clientWidth - 8) / cellW))),
-      rows: Math.max(5, Math.min(200, Math.floor((els.stage.clientHeight - 8) / cellH))),
+      cols: Math.max(20, Math.min(500, Math.floor((els.stage.clientWidth - 4) / cellW))),
+      rows: Math.max(5, Math.min(200, Math.floor((els.stage.clientHeight - 4) / cellH))),
     };
   }
 
