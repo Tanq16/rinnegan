@@ -6,6 +6,7 @@ const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
 const GRACE_SECONDS = 60;
 const MAX_MISSED_REFRESHES = 4;
+const MAX_CREDENTIAL_FAILURES = 4;
 // Cap the per-socket send queue so a stalled client's backlog cannot exhaust server memory.
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 
@@ -20,12 +21,14 @@ export function evaluateSocket(meta, nowMs, currentFingerprint, accessTtlSeconds
   return 'slide';
 }
 
-// A credential read that momentarily fails must never close a possibly-valid session: degrade to a ping.
+// A momentary credential-read failure degrades to a ping so a transient blip can't drop a valid session; a persistent one — a deleted or corrupt auth file — must still fail closed after MAX_CREDENTIAL_FAILURES rather than ping a past-deadline socket forever.
 export function evaluateSocketSafe(meta, nowMs, currentFingerprint, accessTtlSeconds) {
   try {
-    return evaluateSocket(meta, nowMs, currentFingerprint, accessTtlSeconds);
+    const action = evaluateSocket(meta, nowMs, currentFingerprint, accessTtlSeconds);
+    meta.credentialFailures = 0;
+    return action;
   } catch {
-    return 'ping';
+    return ++meta.credentialFailures >= MAX_CREDENTIAL_FAILURES ? 'close' : 'ping';
   }
 }
 
@@ -146,6 +149,7 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
       lastSeen: Date.now(),
       deadline: typeof session.accessExp === 'number' ? session.accessExp : Infinity,
       missedRefreshes: 0,
+      credentialFailures: 0,
       epoch: 0,
       pty: null,
       ptySubs: [],

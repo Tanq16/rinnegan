@@ -135,10 +135,12 @@ button.danger { color: var(--err); border-color: var(--err); }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px; /* keep computeNatural's avail = clientWidth/Height - 16 in sync */
+  padding: 2px; /* keep computeNatural's avail = clientWidth/Height - 4 in sync */
   /* seamless: same color as terminal bg so the sub-grid remainder reads as padding, not a letterbox border */
   background: var(--bg);
 }
+/* xterm.css hardcodes the viewport to #000; repoint it at the terminal bg so the scroll area and sub-cell remainder don't frame the terminal in black against the gutter */
+.xterm .xterm-viewport { background-color: var(--bg); }
 
 #probe {
   position: absolute;
@@ -155,12 +157,12 @@ button.danger { color: var(--err); border-color: var(--err); }
   right: 6px;
   z-index: 30;
   background: var(--inset);
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 5px;
   border-radius: 5px;
   opacity: .35; /* unobtrusive over the terminal until needed */
   transition: opacity .15s ease;
 }
+#control-toggle svg { display: block; }
 #control-toggle:hover,
 #control-toggle:focus-visible,
 #control-toggle[aria-expanded="true"] { opacity: 1; }
