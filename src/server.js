@@ -10,6 +10,8 @@ import { loadRecord, verify, fingerprint } from './password.js';
 import { createHttpServer } from './http.js';
 import { attachWebSocket } from './ws.js';
 import { attachTunnel } from './tunnel.js';
+import { attachProxy, splitProxyPath } from './proxy.js';
+import { createAliasStore } from './proxies.js';
 import { info, error } from './log.js';
 
 function startCaddy(root, flags) {
@@ -103,6 +105,11 @@ export function start(cfg, flags = {}) {
 
   const terminal = attachWebSocket({ config: cfg, authenticate, authOn, host, currentFingerprint });
 
+  const aliases = cfg.proxy.enabled ? createAliasStore(path.join(configDir(), 'proxies.json')) : null;
+  const proxy = aliases
+    ? attachProxy({ aliases: aliases.entries, cookieNames: [cfg.cookie.name, refreshCookieName], secure: cfg.cookie.secure })
+    : null;
+
   const refresh = noAuth
     ? () => ({ accessExpiresAt: null })
     : (req) => {
@@ -148,6 +155,8 @@ export function start(cfg, flags = {}) {
     ],
     refresh,
     publicDir,
+    proxy,
+    aliases,
   });
   const tunnel = attachTunnel({ authenticate });
   server.on('upgrade', (req, socket, head) => {
@@ -155,6 +164,13 @@ export function start(cfg, flags = {}) {
     try { ({ pathname } = new URL(req.url, 'http://x')); } catch { socket.destroy(); return; }
     if (pathname === '/ws') { terminal.handleUpgrade(req, socket, head); return; }
     if (pathname === '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
+    if (proxy && pathname.startsWith('/proxy/')) {
+      const session = authenticate(req);
+      const split = session && splitProxyPath(req.url);
+      if (!split) { socket.destroy(); return; }
+      proxy.handleUpgrade(req, socket, head, split, session);
+      return;
+    }
     socket.destroy();
   });
 

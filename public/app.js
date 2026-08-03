@@ -47,6 +47,8 @@
     transferNoticeText: $('transfer-notice-text'), transferNoticePath: $('transfer-notice-path'),
     transferNoticeClose: $('transfer-notice-close'),
     downloadPath: $('download-path'), downloadBtn: $('download-btn'),
+    proxySection: $('proxy-section'), proxyList: $('proxy-list'), proxyName: $('proxy-name'),
+    proxyPort: $('proxy-port'), proxyAdd: $('proxy-add'), proxyError: $('proxy-error'),
     theme: $('theme'),
     toast: $('toast'),
   };
@@ -626,6 +628,88 @@
     a.remove();
   }
 
+  function proxyError(msg) {
+    els.proxyError.textContent = msg;
+    els.proxyError.hidden = !msg;
+  }
+
+  function renderProxies(entries) {
+    els.proxyList.replaceChildren();
+    const names = Object.keys(entries).sort();
+    if (!names.length) {
+      const li = document.createElement('li');
+      li.className = 'proxy-empty';
+      li.textContent = 'No names yet — /proxy/<port>/ works without one.';
+      return els.proxyList.append(li);
+    }
+    for (const name of names) {
+      const li = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/proxy/' + name + '/';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = name;
+      const port = document.createElement('span');
+      port.className = 'proxy-port';
+      port.textContent = entries[name];
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'proxy-remove';
+      remove.setAttribute('aria-label', 'Remove ' + name);
+      remove.textContent = '×';
+      remove.addEventListener('click', () => removeProxy(name));
+      li.append(link, port, remove);
+      els.proxyList.append(li);
+    }
+  }
+
+  // A 404 is how the server reports proxy.enabled=false, so the whole section stays hidden rather than offering a dead form.
+  async function loadProxies() {
+    let res;
+    try {
+      res = await fetch('/proxies');
+    } catch {
+      return;
+    }
+    if (!res.ok) return;
+    els.proxySection.hidden = false;
+    renderProxies(await res.json());
+  }
+
+  async function addProxy() {
+    const name = els.proxyName.value.trim();
+    const port = els.proxyPort.value.trim();
+    if (!name || !port) return proxyError('name and port are both required');
+    let res;
+    try {
+      res = await fetch('/proxies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, port }),
+      });
+    } catch {
+      return proxyError('could not reach the server');
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return proxyError(body.error || 'could not add that name');
+    els.proxyName.value = '';
+    els.proxyPort.value = '';
+    proxyError('');
+    renderProxies(body);
+  }
+
+  async function removeProxy(name) {
+    let res;
+    try {
+      res = await fetch('/proxies?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    } catch {
+      return proxyError('could not reach the server');
+    }
+    if (!res.ok) return proxyError('could not remove that name');
+    proxyError('');
+    renderProxies(await res.json());
+  }
+
   function init() {
     els.toggle.addEventListener('click', () => {
       const open = els.panel.classList.toggle('open');
@@ -685,6 +769,12 @@
 
     els.downloadBtn.addEventListener('click', startDownload);
     els.downloadPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') startDownload(); });
+
+    els.proxyAdd.addEventListener('click', addProxy);
+    for (const input of [els.proxyName, els.proxyPort]) {
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') addProxy(); });
+    }
+    loadProxies();
 
     window.addEventListener('resize', onViewportResize);
     document.fonts.ready.then(onViewportResize); // webfont metrics differ from fallback

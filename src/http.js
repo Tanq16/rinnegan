@@ -2,9 +2,13 @@ import { createServer } from 'node:http';
 import { serveStatic } from './static.js';
 import { handleUpload, handleUploadBatch } from './upload.js';
 import { handleDownload } from './download.js';
+import { splitProxyPath } from './proxy.js';
+import { validAliasName } from './proxies.js';
+import { validatePort } from './tunnel.js';
 import { error } from './log.js';
 
 const MAX_LOGIN_BODY = 10240;
+const MAX_PROXY_BODY = 1024;
 
 // Resolves null when the body exceeds maxBytes (caller responds 413).
 function readBody(req, maxBytes) {
@@ -60,7 +64,12 @@ function notFound(res) {
   res.end('not found');
 }
 
-export function createHttpServer({ authenticate, authOn, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+export function createHttpServer({ authenticate, authOn, login, makeSessionCookie, clearSessionCookie, refresh, publicDir, proxy, aliases }) {
   async function handleLogin(req, res) {
     const body = await readBody(req, MAX_LOGIN_BODY);
     if (body === null) {
@@ -82,6 +91,27 @@ export function createHttpServer({ authenticate, authOn, login, makeSessionCooki
     if (result.setCookie) headers['Set-Cookie'] = result.setCookie;
     res.writeHead(200, headers);
     res.end(JSON.stringify({ accessExpiresAt: result.accessExpiresAt }));
+  }
+
+  async function handleAliasAdd(req, res) {
+    const body = await readBody(req, MAX_PROXY_BODY);
+    if (body === null) {
+      // Connection: close — an over-limit body is left unread, and the remainder would poison keep-alive.
+      res.writeHead(413, { 'Content-Type': 'application/json', Connection: 'close' });
+      return res.end(JSON.stringify({ error: 'payload too large' }));
+    }
+    let msg;
+    try {
+      msg = JSON.parse(body);
+    } catch {
+      return sendJson(res, 400, { error: 'invalid json' });
+    }
+    const name = msg?.name;
+    const port = validatePort(msg?.port);
+    if (!validAliasName(name)) return sendJson(res, 400, { error: 'name must be lowercase letters, digits and dashes, and cannot be all digits' });
+    if (port === null) return sendJson(res, 400, { error: 'port must be between 1 and 65535' });
+    aliases.set(name, port);
+    return sendJson(res, 200, { ...aliases.entries });
   }
 
   async function route(req, res) {
@@ -140,6 +170,29 @@ export function createHttpServer({ authenticate, authOn, login, makeSessionCooki
       if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
       if (!authenticate(req)) return unauthorized(res);
       return handleDownload(req, res, searchParams);
+    }
+
+    if (pathname === '/proxies') {
+      if (!proxy) return notFound(res);
+      if (!authenticate(req)) return unauthorized(res);
+      if (method === 'GET') return sendJson(res, 200, { ...aliases.entries });
+      if (method === 'POST') return handleAliasAdd(req, res);
+      if (method === 'DELETE') {
+        const name = searchParams.get('name') ?? '';
+        if (!validAliasName(name)) return sendJson(res, 400, { error: 'invalid name' });
+        aliases.remove(name);
+        return sendJson(res, 200, { ...aliases.entries });
+      }
+      return methodNotAllowed(res, 'GET, POST, DELETE');
+    }
+
+    // Every method passes through: the upstream owns its own verbs, so no methodNotAllowed gate here.
+    if (pathname === '/proxy' || pathname.startsWith('/proxy/')) {
+      if (!proxy) return notFound(res);
+      if (!authenticate(req)) return unauthorized(res);
+      const split = splitProxyPath(req.url);
+      if (!split) return notFound(res);
+      return proxy.handleRequest(req, res, split);
     }
 
     if (pathname === '/styles.css' || pathname === '/app.js' || pathname === '/logo.svg' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {

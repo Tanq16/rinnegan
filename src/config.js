@@ -18,6 +18,7 @@ const DEFAULTS = {
       LC_ALL: 'en_US.UTF-8',
     },
   },
+  proxy: { enabled: true },
   authFile: './auth.json',
 };
 
@@ -85,9 +86,11 @@ export function loadConfig() {
 
   const cfg = deepMerge(structuredClone(DEFAULTS), user);
 
-  for (const sec of ['listen', 'cookie', 'terminal']) {
+  for (const sec of ['listen', 'cookie', 'terminal', 'proxy']) {
     check(isPlainObject(cfg[sec]), sec + ' must be an object');
   }
+
+  check(typeof cfg.proxy.enabled === 'boolean', 'proxy.enabled must be a boolean');
 
   check(
     Number.isInteger(cfg.listen.port) && cfg.listen.port >= 0 && cfg.listen.port <= 65535,

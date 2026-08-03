@@ -51,6 +51,18 @@
         as <code>.tar.gz</code>.</p>
     </section>
 
+    <section id="proxy-section" hidden>
+      <h3>Proxy</h3>
+      <ul id="proxy-list"></ul>
+      <div class="row">
+        <input id="proxy-name" type="text" placeholder="name" spellcheck="false" autocomplete="off">
+        <input id="proxy-port" type="text" inputmode="numeric" placeholder="port" spellcheck="false" autocomplete="off">
+        <button id="proxy-add" type="button">Add</button>
+      </div>
+      <p id="proxy-error" class="upload-error" hidden></p>
+      <p class="hint">Opens an HTTP server running on this host in your browser &mdash; <code>/proxy/8080/</code> needs no setup, and a name here makes it <code>/proxy/ide/</code>. HTTP and WebSocket only; reach anything else with the CLI tunnel.</p>
+    </section>
+
     <section>
       <h3>Keys</h3>
       <div class="row">

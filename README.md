@@ -24,6 +24,7 @@ It is **not** an IDE, a task manager, or a tmux manager — just a terminal fron
 - **Pick your shell** — `--shell zsh|bash|fish`, or any command string via `terminal.shell`. See [CLI](#cli).
 - **Eight color schemes** — Catppuccin Mocha/Latte, Gruvbox Dark/Light, Dracula, Nord, One Dark, and Tokyo Night, switched from the control panel and remembered per browser. See [Theme and fonts](#theme-and-fonts).
 - **Authenticated port tunnel** — forward your `localhost:<port>` to a `localhost` port on the server over an authenticated WebSocket (`rinnegan tunnel`) — `ssh -L` without SSH. See [CLI](#cli).
+- **Browser proxy to host HTTP servers** — open anything serving HTTP on the box at `/proxy/<port>/`, in a tab, with no client to install; name the ones you use often. See [Proxy](#proxy).
 - **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
 - **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
 - **Self-contained tarball** — each release bundles its own Node runtime and a platform-native `node-pty`; the host needs no Node, Python, compiler, or `make`.
@@ -110,6 +111,7 @@ All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of t
 | `terminal.cwd` | `$HOME` | Falls back to your home directory when unset |
 | `terminal.cols` / `rows` | `120` / `36` | Fallback grid only, used when a client reports a malformed size; normally your viewport decides |
 | `terminal.env` | `TERM`, `COLORTERM`, `LANG`/`LC_ALL` | Merged over the server process env |
+| `proxy.enabled` | `true` | Serves `/proxy/<port-or-name>/`; `false` removes the routes and hides the panel section. See [Proxy](#proxy) |
 | `authFile` | `./auth.json` | The scrypt password record; resolved under `~/.config/rinnegan` |
 
 - **Shell.** Defaults to `/usr/bin/env zsh -l`; zsh isn't preinstalled on some minimal Linux distros, so install it, pass `--shell bash`, or point `terminal.shell` at an existing shell. The config value is split on whitespace into executable + args with no shell quoting, so keep args simple.
@@ -144,6 +146,23 @@ Bytes are streamed to disk with a `POST`, with **no size cap** and a live progre
 **Nothing is typed into your terminal.** The modal shows the finished path and copies it when the clipboard API is available (HTTPS or `localhost`); otherwise it says so and you select it. Paste it into a tool like [Claude Code](https://claude.com/claude-code) yourself — one `Cmd-V`, and you choose when and where.
 
 **Download** — give the Files panel an absolute host path. It probes the path first, so a typo shows a real in-app error instead of a cryptic browser failure, then hands off to your browser's own download manager. A single file streams with real progress; a directory streams as `<dir>.tar.gz` (`tar xzf` it on the other end). Anyone logged in can download anything the server user can read — parity with the shell they already have (see [Security](#security)). Every upload and download is logged server-side with the path; with a single shared password there is no actor to attribute it to.
+
+### Proxy
+
+Anything serving **HTTP on the host** is reachable from your browser at `/proxy/<port>/`. Start a server on the box — a static file server for a design you want to look at, a dev server for the frontend you are building, a notebook, a preview of a rendered file — and open `/proxy/8080/` in a tab. It is gated by the same session as the terminal, so nothing new is exposed to the internet.
+
+There is nothing to set up and nothing to start. `/proxy/…` is a route on the server rinnegan already runs, so it costs nothing when idle: each request connects to `127.0.0.1:<port>` at that moment, pipes the bytes back, and is done. If nothing is listening you get a `502` and no lingering state — start the service later and the next request just works.
+
+Names are optional convenience. Add a `name` and `port` in the control panel's Proxy section and `/proxy/<name>/` resolves to that port; `/proxy/<port>/` keeps working either way. Names are lowercase letters, digits, and dashes, up to 32 characters, and cannot be all digits (a numeric path segment is always read as a port). They live in `~/.config/rinnegan/proxies.json` (mode 0600), written by the panel — edit it by hand if you like, but restart to pick the change up, and expect the panel to overwrite it on the next add.
+
+**HTTP and WebSocket only.** A browser cannot terminate a raw TCP socket, so this reaches web servers and nothing else — Postgres, Redis, and SSH still need [`rinnegan tunnel`](#cli), which puts a real client on your machine to receive them. The rule of thumb: if it renders in a browser it is a URL, if it does not it is a tunnel.
+
+Two things worth knowing:
+
+- **Apps that assume they are at the site root may not work.** Rinnegan rewrites redirects, scopes upstream cookies to the target's path, and sends `X-Forwarded-Proto`/`-Host`/`-Prefix`, but an app that hardcodes absolute asset paths like `/static/app.js` will still break under a sub-path. Ones using relative paths, or honoring a base-path setting, work fine.
+- **Proxied pages run on rinnegan's origin**, so their JavaScript can reach rinnegan's own routes with your session cookie. That is fine for the intended use — everything you proxy is something you started, on your own box, behind your own password — but it means what you proxy is trusted as much as your shell is. Rinnegan's session cookies are stripped before the request is forwarded, so an upstream never sees your token.
+
+Set `proxy.enabled: false` in `config.json` to remove the routes entirely.
 
 ### Theme and fonts
 
@@ -186,6 +205,7 @@ Password prompts are never echoed. `auth.json` is re-read on every login, so `pa
 - Only a scrypt password hash is stored; passwords and session tokens are never logged.
 - **One shared password, no accounts.** Everyone who can log in is the same principal, so nothing is attributable — transfer logs record the path, not an actor. Rotating the password is the only way to revoke access, and it does so within one access-TTL.
 - **No login rate limiting** — with a single secret and no username to guess, this matters more per attempt than it would with accounts. Do not expose beyond a trusted network without HTTPS and network-level access controls.
+- **[`/proxy`](#proxy) grants no authority the shell does not already grant** — it reaches host-local HTTP servers, which a shell can do anyway — but proxied pages run on rinnegan's origin and so can reach its routes with your session. Proxy only what you run yourself, or set `proxy.enabled: false`.
 - **No password is seeded on first run** — set one with `passwd` and make it a strong one; `serve` refuses to start without `auth.json` unless `--no-auth` is set.
 - `~/.config/rinnegan` and its `config.json` and `auth.json` should be readable only by the running user (rinnegan creates the directory mode 0700 and those files mode 0600).
 

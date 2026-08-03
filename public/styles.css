@@ -228,6 +228,31 @@ label.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 }
 #download-path:focus { outline: none; border-color: var(--accent-soft); }
 
+#proxy-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+#proxy-list li { display: flex; align-items: center; gap: 8px; }
+#proxy-list a { flex: 1; min-width: 0; color: var(--info); overflow-wrap: anywhere; }
+.proxy-port { color: var(--fg-muted); font: 400 12px 'JetBrains Mono', monospace; }
+.proxy-empty { color: var(--fg-muted); font-size: 12px; }
+.proxy-remove {
+  padding: 0 6px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.proxy-remove:hover, .proxy-remove:focus-visible { color: var(--alert); }
+#proxy-name, #proxy-port {
+  min-width: 0;
+  background: var(--inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--fg);
+  font: 400 12px 'JetBrains Mono', monospace;
+}
+#proxy-name { flex: 2; }
+#proxy-port { flex: 1; }
+#proxy-name:focus, #proxy-port:focus { outline: none; border-color: var(--accent-soft); }
+#proxy-error { margin-top: 8px; }
+
 #theme {
   width: 100%;
   background: var(--inset);
