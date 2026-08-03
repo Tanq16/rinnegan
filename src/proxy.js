@@ -135,8 +135,9 @@ export function attachProxy({ aliases, cookieNames, secure }) {
   function handleRequest(req, res, split) {
     const port = resolveTarget(split.segment, aliases);
     if (port === null) return fail(res, 404, 'no such proxy target');
+    // 307, not 302: a POST to a bare /proxy/<target> would otherwise be reissued as a GET with its body dropped.
     if (needsTrailingSlash(split.rest)) {
-      res.writeHead(302, { Location: `${split.prefix}/${split.rest}` });
+      res.writeHead(307, { Location: `${split.prefix}/${split.rest}` });
       return res.end();
     }
     const headers = forwardHeaders(req.headers, {
