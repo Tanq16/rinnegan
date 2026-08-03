@@ -157,13 +157,15 @@ There is nothing to set up and nothing to start. `/_rinnegan/proxy/…` is a rou
 
 **HTTP and WebSocket only.** A browser cannot terminate a raw TCP socket, so this reaches web servers and nothing else — Postgres, Redis, and SSH still need [`rinnegan tunnel`](#cli), which puts a real client on your machine to receive them. The rule of thumb: if it renders in a browser it is a URL, if it does not it is a tunnel.
 
-Two things worth knowing:
+Three things worth knowing:
 
 - **Apps that assume they are at the site root mostly work.** Relative URLs need nothing — the browser resolves them against the current page, so they land back inside the prefix on their own. Root-relative ones like `/static/app.js` throw the prefix away before the request is made; rinnegan recovers the target from the `Referer` and answers `307` to the prefixed URL, for links and subresources alike. Redirects are rewritten, upstream cookies are scoped to the target's path, and `X-Forwarded-Proto`/`-Host`/`-Prefix` are set for apps that read them.
 - **What the Referer fallback cannot reach.** WebSocket upgrades carry no `Referer` — browsers send `Origin`, which is the same for every target on one origin — so an upstream that hardcodes a root-relative socket URL has nothing to recover from and the connection is refused. Give it a relative URL, or a base path if it supports one. Requests where the app sets its own `referrerPolicy: no-referrer` are likewise invisible. An app that supports a base path is still the most reliable option; point it at `/_rinnegan/proxy/<port>/`.
 - **Proxied pages run on rinnegan's origin**, so their JavaScript can reach rinnegan's own routes with your session cookie. That is fine for the intended use — everything you proxy is something you started, on your own box, behind your own password — but it means what you proxy is trusted as much as your shell is. Rinnegan's session cookies are stripped before the request is forwarded, so an upstream never sees your token.
 
 The bundled Caddyfiles send `Referrer-Policy: same-origin` rather than `no-referrer` so the fallback above has something to read; cross-origin referrers are still withheld. Tightening it back to `no-referrer` silently costs you every root-relative asset in a proxied app.
+
+If you already ran `serve --https` before this version, your runtime `~/.config/rinnegan/Caddyfile` still says `no-referrer` — it is seeded once and never clobbered. Edit that line, or reseed with `serve --https --refresh-caddyfile` (which discards any other runtime edits).
 
 Set `proxy.enabled: false` in `config.json` to remove the routes entirely.
 
@@ -225,7 +227,7 @@ Each tarball bundles **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LI
 - **Certificate:** issued by Caddy's internal CA, so browsers warn on first visit. The warning returns whenever the leaf rotates, because browsers pin a click-through exception to that leaf's fingerprint — the bundled `Caddyfile` therefore pins a 30-day leaf instead of Caddy's 12-hour default. To be rid of the warning entirely, install the CA root (`~/.config/rinnegan/caddy-data/caddy/pki/authorities/local/root.crt`) in each client's trust store; it is stable for 10 years, so rotation stops mattering. Upgrading from an older release keeps your existing runtime Caddyfile — pass `serve --https --refresh-caddyfile` once to pick up the new lifetime.
 - **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/`, and its config is the runtime `~/.config/rinnegan/Caddyfile` (seeded from the bundled template on the first `--https` run, never clobbered after); delete `caddy-data/` and restart to regenerate the CA.
 - **Ports:** if you change `listen.port`, edit `~/.config/rinnegan/Caddyfile`'s `reverse_proxy` target to match — that runtime copy persists across updates (`serve --https` warns if the port is not `8442`). The bundled template only reseeds when you pass `serve --https --refresh-caddyfile`, which discards any runtime edits.
-- **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
+- **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` (see [Proxy](#proxy)), and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
 - **Still no rate limiting** even over HTTPS — keep it on a trusted network.
 
 rinnegan and Caddy can also run as two separate processes: `./bin/rinnegan serve`, then `./bin/caddy` with `XDG_DATA_HOME`/`XDG_CONFIG_HOME` pointed at a local directory.
