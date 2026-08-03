@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { serveStatic } from './static.js';
 import { handleUpload, handleUploadBatch } from './upload.js';
 import { handleDownload } from './download.js';
-import { splitProxyPath } from './proxy.js';
+import { splitProxyPath, refererTarget } from './proxy.js';
 import { validAliasName } from './proxies.js';
 import { validatePort } from './tunnel.js';
 import { error } from './log.js';
@@ -125,6 +125,16 @@ export function createHttpServer({ authenticate, authOn, login, makeSessionCooki
       return;
     }
     const method = req.method;
+
+    // Ahead of rinnegan's own routes: a request carrying a proxy Referer belongs to that upstream, and letting /app.js or /css/ match here first would serve rinnegan's assets into a proxied page. 307 rather than 302 so a POST keeps its method and body.
+    if (proxy && !pathname.startsWith('/proxy')) {
+      const prefix = refererTarget(req.headers.referer, req.headers['sec-fetch-dest'], aliases.entries);
+      if (prefix) {
+        if (!authenticate(req)) return unauthorized(res);
+        res.writeHead(307, { Location: prefix + req.url });
+        return res.end();
+      }
+    }
 
     if (pathname === '/') {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');

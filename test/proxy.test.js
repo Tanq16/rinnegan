@@ -7,6 +7,7 @@ import {
   stripCookies,
   rewriteLocation,
   rewriteCookiePath,
+  refererTarget,
   forwardHeaders,
   responseHeaders,
   serializeUpgrade,
@@ -184,6 +185,51 @@ test('rewriteCookiePath', async (t) => {
       assert.equal(rewriteCookiePath(c.in, '/proxy/ide'), c.want);
     });
   }
+});
+
+test('refererTarget', async (t) => {
+  const aliases = { ide: 9099 };
+  const from = (referer, dest) => refererTarget(referer, dest, aliases);
+
+  await t.test('a subresource from a proxied page recovers its prefix', () => {
+    assert.equal(from('https://term.example.com/proxy/ide/docs/readme.md', 'script'), '/proxy/ide');
+  });
+
+  await t.test('a bare port target is recovered too', () => {
+    assert.equal(from('https://term.example.com/proxy/9099/a/b', 'image'), '/proxy/9099');
+  });
+
+  await t.test('a query or fragment on the referring page does not disturb the prefix', () => {
+    assert.equal(from('https://term.example.com/proxy/ide/a?x=1#y', 'style'), '/proxy/ide');
+  });
+
+  // Following a link out of a proxied page must still reach rinnegan's own UI.
+  await t.test('a document navigation is never captured', () => {
+    assert.equal(from('https://term.example.com/proxy/ide/docs/readme.md', 'document'), null);
+  });
+
+  await t.test('a referrer from rinnegan\'s own pages is not a proxy context', () => {
+    for (const r of ['https://term.example.com/', 'https://term.example.com/login', 'https://term.example.com/proxies']) {
+      assert.equal(from(r, 'script'), null, `${r} must not resolve`);
+    }
+  });
+
+  // Redirecting to a target that no longer resolves would answer a 404 one round trip later.
+  await t.test('a referrer naming an unknown target does not redirect', () => {
+    assert.equal(from('https://term.example.com/proxy/gone/x', 'script'), null);
+    assert.equal(from('https://term.example.com/proxy/99999/x', 'script'), null);
+  });
+
+  await t.test('a missing or malformed referrer is ignored', () => {
+    for (const r of [undefined, '', 'not a url', '/proxy/ide/x']) {
+      assert.equal(from(r, 'script'), null, `${JSON.stringify(r)} must not resolve`);
+    }
+  });
+
+  // Sec-Fetch-Dest is absent on older browsers and non-browser clients; only an explicit document opts out.
+  await t.test('an absent Sec-Fetch-Dest still recovers the prefix', () => {
+    assert.equal(from('https://term.example.com/proxy/ide/a', undefined), '/proxy/ide');
+  });
 });
 
 test('forwardHeaders', async (t) => {

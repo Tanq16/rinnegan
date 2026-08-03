@@ -29,6 +29,21 @@ export function resolveTarget(segment, aliases) {
   return Object.hasOwn(aliases, segment) ? aliases[segment] : null;
 }
 
+// A root-relative URL an upstream emits resolves against the origin, so the prefix is gone by the time the browser asks for it and the Referer is the only surviving record of which target it belongs to. Document navigations are excluded so following a link out of a proxied page still reaches rinnegan's own UI.
+export function refererTarget(referer, fetchDest, aliases) {
+  if (fetchDest === 'document') return null;
+  if (typeof referer !== 'string' || referer === '') return null;
+  let pathname;
+  try {
+    ({ pathname } = new URL(referer));
+  } catch {
+    return null;
+  }
+  const split = splitProxyPath(pathname);
+  if (!split) return null;
+  return resolveTarget(split.segment, aliases) === null ? null : split.prefix;
+}
+
 export function stripCookies(header, names) {
   if (typeof header !== 'string' || header === '') return null;
   const kept = header.split(';').filter((part) => {

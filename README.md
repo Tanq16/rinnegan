@@ -159,8 +159,11 @@ Names are optional convenience. Add a `name` and `port` in the control panel's P
 
 Two things worth knowing:
 
-- **Apps that assume they are at the site root may not work.** Rinnegan rewrites redirects, scopes upstream cookies to the target's path, and sends `X-Forwarded-Proto`/`-Host`/`-Prefix`, but an app that hardcodes absolute asset paths like `/static/app.js` will still break under a sub-path. Ones using relative paths, or honoring a base-path setting, work fine.
+- **Apps that assume they are at the site root mostly work, but not always.** Relative URLs need nothing — the browser resolves them against the current page, so they land back inside the prefix on their own. Root-relative ones like `/static/app.js` throw the prefix away before the request is made; rinnegan recovers the target from the `Referer` and answers `307` to the prefixed URL, which fixes most of them. Redirects are rewritten, upstream cookies are scoped to the target's path, and `X-Forwarded-Proto`/`-Host`/`-Prefix` are set for apps that read them.
+- **What the Referer fallback cannot reach.** WebSocket upgrades carry no `Referer` at all, so an upstream opening a root-relative socket lands on rinnegan instead — give it a relative URL or a configured base path. Requests where the app sets its own `referrerPolicy: no-referrer` are likewise invisible, and top-level navigations are deliberately excluded so a link out of a proxied page still reaches rinnegan's own UI. An app that supports a base path is still the most reliable option; point it at `/proxy/<name>/`.
 - **Proxied pages run on rinnegan's origin**, so their JavaScript can reach rinnegan's own routes with your session cookie. That is fine for the intended use — everything you proxy is something you started, on your own box, behind your own password — but it means what you proxy is trusted as much as your shell is. Rinnegan's session cookies are stripped before the request is forwarded, so an upstream never sees your token.
+
+The bundled Caddyfiles send `Referrer-Policy: same-origin` rather than `no-referrer` so the fallback above has something to read; cross-origin referrers are still withheld. Tightening it back to `no-referrer` silently costs you every root-relative asset in a proxied app.
 
 Set `proxy.enabled: false` in `config.json` to remove the routes entirely.
 
