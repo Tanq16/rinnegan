@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { serveStatic } from './static.js';
 import { handleUpload, handleUploadBatch } from './upload.js';
 import { handleDownload } from './download.js';
+import { splitProxyPath, refererTarget } from './proxy.js';
+import { NS } from './paths.js';
 import { error } from './log.js';
 
 const MAX_LOGIN_BODY = 10240;
@@ -60,7 +62,7 @@ function notFound(res) {
   res.end('not found');
 }
 
-export function createHttpServer({ authenticate, authOn, login, makeSessionCookie, clearSessionCookie, refresh, publicDir }) {
+export function createHttpServer({ authenticate, authOn, login, makeSessionCookie, clearSessionCookie, refresh, publicDir, proxy }) {
   async function handleLogin(req, res) {
     const body = await readBody(req, MAX_LOGIN_BODY);
     if (body === null) {
@@ -71,7 +73,7 @@ export function createHttpServer({ authenticate, authOn, login, makeSessionCooki
     const params = new URLSearchParams(body);
     const session = await login(params.get('password') ?? '');
     if (session) return redirect(res, '/', makeSessionCookie(session));
-    return redirect(res, '/login?error=1');
+    return redirect(res, NS + '/login?error=1');
   }
 
   function handleRefresh(req, res) {
@@ -99,52 +101,77 @@ export function createHttpServer({ authenticate, authOn, login, makeSessionCooki
     if (pathname === '/') {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
       if (authenticate(req)) return serveStatic(req, res, publicDir, '/index.html');
-      return redirect(res, '/login');
+      return redirect(res, NS + '/login');
     }
 
-    if (pathname === '/login') {
-      // Unrouted without auth: there is no password to check, so a POST would only burn a file read and a scrypt derivation per request.
-      if (!authOn) return notFound(res);
-      if (method === 'GET') {
-        if (authenticate(req)) return redirect(res, '/');
-        return serveStatic(req, res, publicDir, '/login.html');
+    if (pathname.startsWith(NS + '/')) {
+      const sub = pathname.slice(NS.length);
+
+      if (sub === '/login') {
+        // Unrouted without auth: there is no password to check, so a POST would only burn a file read and a scrypt derivation per request.
+        if (!authOn) return notFound(res);
+        if (method === 'GET') {
+          if (authenticate(req)) return redirect(res, '/');
+          return serveStatic(req, res, publicDir, '/login.html');
+        }
+        if (method === 'POST') return handleLogin(req, res);
+        return methodNotAllowed(res, 'GET, POST');
       }
-      if (method === 'POST') return handleLogin(req, res);
-      return methodNotAllowed(res, 'GET, POST');
+
+      if (sub === '/logout') {
+        if (!authOn) return notFound(res);
+        if (method !== 'POST') return methodNotAllowed(res, 'POST');
+        return redirect(res, NS + '/login', clearSessionCookie());
+      }
+
+      if (sub === '/refresh') {
+        if (method !== 'POST') return methodNotAllowed(res, 'POST');
+        return handleRefresh(req, res);
+      }
+
+      if (sub === '/upload') {
+        if (method !== 'POST') return methodNotAllowed(res, 'POST');
+        if (!authenticate(req)) return unauthorized(res);
+        return handleUpload(req, res, searchParams);
+      }
+
+      if (sub === '/upload/batch') {
+        if (method !== 'POST') return methodNotAllowed(res, 'POST');
+        if (!authenticate(req)) return unauthorized(res);
+        return handleUploadBatch(req, res);
+      }
+
+      if (sub === '/download') {
+        if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
+        if (!authenticate(req)) return unauthorized(res);
+        return handleDownload(req, res, searchParams);
+      }
+
+      // Every method passes through: the upstream owns its own verbs, so no methodNotAllowed gate here.
+      if (sub === '/proxy' || sub.startsWith('/proxy/')) {
+        if (!proxy) return notFound(res);
+        if (!authenticate(req)) return unauthorized(res);
+        const split = splitProxyPath(req.url);
+        if (!split) return notFound(res);
+        return proxy.handleRequest(req, res, split);
+      }
+
+      if (sub === '/styles.css' || sub === '/app.js' || sub === '/logo.svg' || sub.startsWith('/vendor/') || sub.startsWith('/css/') || sub.startsWith('/fonts/')) {
+        if (method !== 'GET') return methodNotAllowed(res, 'GET');
+        return serveStatic(req, res, publicDir, sub);
+      }
+
+      return notFound(res);
     }
 
-    if (pathname === '/logout') {
-      if (!authOn) return notFound(res);
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return redirect(res, '/login', clearSessionCookie());
-    }
-
-    if (pathname === '/refresh') {
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleRefresh(req, res);
-    }
-
-    if (pathname === '/upload') {
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      if (!authenticate(req)) return unauthorized(res);
-      return handleUpload(req, res, searchParams);
-    }
-
-    if (pathname === '/upload/batch') {
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      if (!authenticate(req)) return unauthorized(res);
-      return handleUploadBatch(req, res);
-    }
-
-    if (pathname === '/download') {
-      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
-      if (!authenticate(req)) return unauthorized(res);
-      return handleDownload(req, res, searchParams);
-    }
-
-    if (pathname === '/styles.css' || pathname === '/app.js' || pathname === '/logo.svg' || pathname.startsWith('/vendor/') || pathname.startsWith('/css/') || pathname.startsWith('/fonts/')) {
-      if (method !== 'GET') return methodNotAllowed(res, 'GET');
-      return serveStatic(req, res, publicDir, pathname);
+    // Nothing outside the namespace is rinnegan's, so an unmatched path can only be an upstream's root-relative URL that lost its prefix when the browser resolved it against the origin.
+    if (proxy) {
+      const prefix = refererTarget(req.headers.referer);
+      if (prefix) {
+        if (!authenticate(req)) return unauthorized(res);
+        res.writeHead(307, { Location: prefix + req.url });
+        return res.end();
+      }
     }
 
     return notFound(res);

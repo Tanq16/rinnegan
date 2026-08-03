@@ -47,6 +47,8 @@
     transferNoticeText: $('transfer-notice-text'), transferNoticePath: $('transfer-notice-path'),
     transferNoticeClose: $('transfer-notice-close'),
     downloadPath: $('download-path'), downloadBtn: $('download-btn'),
+    proxySection: $('proxy-section'), proxyPort: $('proxy-port'),
+    proxyOpen: $('proxy-open'), proxyError: $('proxy-error'),
     theme: $('theme'),
     toast: $('toast'),
   };
@@ -89,7 +91,7 @@
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
     setStatus('connecting');
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/_rinnegan/ws');
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       hbTimer = setInterval(() => send({ t: 'hb' }), 30000);
@@ -141,7 +143,7 @@
     cancelRefresh();
     let res;
     try {
-      res = await fetch('/refresh', { method: 'POST', signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) });
+      res = await fetch('/_rinnegan/refresh', { method: 'POST', signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) });
     } catch {
       return retryRefresh();
     }
@@ -172,7 +174,7 @@
     if (recovering) return retryConnect();
     recovering = true;
     let res;
-    try { res = await fetch('/refresh', { method: 'POST', signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) }); }
+    try { res = await fetch('/_rinnegan/refresh', { method: 'POST', signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) }); }
     catch { return retryConnect(); }
     if (res.status === 401) { forceLogin(); return; }
     let body = null;
@@ -211,6 +213,7 @@
 
   function onHello(msg) {
     authOn = msg.authOn === true;
+    els.proxySection.hidden = msg.proxyOn !== true;
     host = msg.host ?? {};
     accessExpiresAt = typeof msg.accessExpiresAt === 'number' ? msg.accessExpiresAt : null;
     epoch = msg.epoch;
@@ -532,7 +535,7 @@
     beginTransfer(name, blob.size);
     let r;
     try {
-      r = await xhrUpload('/upload?name=' + encodeURIComponent(name), blob, renderProgress);
+      r = await xhrUpload('/_rinnegan/upload?name=' + encodeURIComponent(name), blob, renderProgress);
     } catch (e) {
       return failTransfer(e);
     }
@@ -548,7 +551,7 @@
     const t = transfer;
     let dest;
     try {
-      const res = await fetch('/upload/batch', {
+      const res = await fetch('/_rinnegan/upload/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: root }),
@@ -562,7 +565,7 @@
         t.label = root + ' — file ' + (i + 1) + '/' + files.length;
         renderProgress(t.done);
         try {
-          await xhrUpload('/upload?batch=' + encodeURIComponent(batch.batchId) + '&path=' + encodeURIComponent(rel),
+          await xhrUpload('/_rinnegan/upload?batch=' + encodeURIComponent(batch.batchId) + '&path=' + encodeURIComponent(rel),
             f, (loaded) => renderProgress(t.done + loaded));
         } catch (e) {
           if (t.cancelled) throw e;
@@ -604,7 +607,7 @@
   async function startDownload() {
     const p = els.downloadPath.value.trim();
     if (!p) return els.downloadPath.focus();
-    const url = '/download?path=' + encodeURIComponent(p);
+    const url = '/_rinnegan/download?path=' + encodeURIComponent(p);
     let res;
     // Probe first: <a download> reports a 404 only as a bare "Failed — No file", and location.href would navigate the terminal away.
     try {
@@ -624,6 +627,19 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
+  }
+
+  function proxyError(msg) {
+    els.proxyError.textContent = msg;
+    els.proxyError.hidden = !msg;
+  }
+
+  function openProxy() {
+    const raw = els.proxyPort.value.trim();
+    const port = /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return proxyError('enter a port between 1 and 65535');
+    proxyError('');
+    window.open('/_rinnegan/proxy/' + port + '/', '_blank', 'noopener');
   }
 
   function init() {
@@ -685,6 +701,9 @@
 
     els.downloadBtn.addEventListener('click', startDownload);
     els.downloadPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') startDownload(); });
+
+    els.proxyOpen.addEventListener('click', openProxy);
+    els.proxyPort.addEventListener('keydown', (e) => { if (e.key === 'Enter') openProxy(); });
 
     window.addEventListener('resize', onViewportResize);
     document.fonts.ready.then(onViewportResize); // webfont metrics differ from fallback

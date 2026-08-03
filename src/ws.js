@@ -45,7 +45,7 @@ export function refreshSockets(sockets, fp, newExp) {
   }
 }
 
-export function attachWebSocket({ config, authenticate, authOn, host, currentFingerprint }) {
+export function attachWebSocket({ config, authenticate, authOn, host, currentFingerprint, proxyOn }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1048576 });
   const sockets = new Map();
 
@@ -159,6 +159,7 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
       t: 'hello',
       epoch: meta.epoch,
       authOn,
+      proxyOn,
       host,
       accessExpiresAt: meta.deadline === Infinity ? null : meta.deadline,
     });

@@ -264,7 +264,7 @@ async function withTempServer({ password, noAuth, shell, seed, args = [] }, fn) 
 }
 
 const loginFor = async (port, password = PASS) => {
-  const res = await fetch(`http://127.0.0.1:${port}/login`, {
+  const res = await fetch(`http://127.0.0.1:${port}/_rinnegan/login`, {
     method: 'POST',
     redirect: 'manual',
     body: new URLSearchParams({ password }),
@@ -315,11 +315,11 @@ async function main() {
         const root = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
         assert.equal(root.status, 200, 'GET / must serve the SPA without a cookie under --no-auth');
         // With no password to check, a login POST would only cost a file read and a scrypt derivation.
-        for (const [path, init] of [['/login', {}], ['/login', { method: 'POST', body: 'password=x' }], ['/logout', { method: 'POST' }]]) {
+        for (const [path, init] of [['/_rinnegan/login', {}], ['/_rinnegan/login', { method: 'POST', body: 'password=x' }], ['/_rinnegan/logout', { method: 'POST' }]]) {
           const res = await fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual', ...init });
           assert.equal(res.status, 404, `${init.method ?? 'GET'} ${path} must be unrouted under --no-auth`);
         }
-        const c = new WSClient(`ws://127.0.0.1:${port}/ws`, null);
+        const c = new WSClient(`ws://127.0.0.1:${port}/_rinnegan/ws`, null);
         try {
           assertHelloShape(await c.nextText(5000, 'no-auth hello'), { authOn: false });
           await c.start(100, 30);
@@ -339,7 +339,7 @@ async function main() {
       await withTempServer({ password: PASS, args: ['--shell', 'bash'] }, async (srv) => {
         const { port } = await withTimeout(srv.ready, 15000, '--shell bash server listening');
         const cookie = await loginFor(port);
-        const c = new WSClient(`ws://127.0.0.1:${port}/ws`, cookie);
+        const c = new WSClient(`ws://127.0.0.1:${port}/_rinnegan/ws`, cookie);
         try {
           const hello = await c.nextText(5000, '--shell bash hello');
           assertHelloShape(hello);
@@ -377,7 +377,7 @@ async function main() {
       await withTempServer({ password: PASS, shell: '/nonexistent/rinnegan-e2e-shell -l' }, async (srv) => {
         const { port } = await withTimeout(srv.ready, 15000, 'bad-shell server listening');
         const cookie = await loginFor(port);
-        const c = new WSClient(`ws://127.0.0.1:${port}/ws`, cookie);
+        const c = new WSClient(`ws://127.0.0.1:${port}/_rinnegan/ws`, cookie);
         try {
           assertHelloShape(await c.nextText(5000, 'bad-shell hello'));
           c.send({ t: 'start', cols: 100, rows: 30 });
@@ -394,27 +394,27 @@ async function main() {
     await check('rotating the password invalidates a live session on refresh', async () => {
       await withTempServer({ password: PASS }, async (srv) => {
         const { port } = await withTimeout(srv.ready, 15000, 'rotation server listening');
-        const res = await fetch(`http://127.0.0.1:${port}/login`, {
+        const res = await fetch(`http://127.0.0.1:${port}/_rinnegan/login`, {
           method: 'POST',
           redirect: 'manual',
           body: new URLSearchParams({ password: PASS }),
         });
         assert.equal(res.status, 302);
         const refreshCookie = getCookiePair(res, 'rinnegan_rt').split(';')[0];
-        const before = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
+        const before = await fetch(`http://127.0.0.1:${port}/_rinnegan/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
         assert.equal(before.status, 200, 'the refresh cookie must work before the rotation');
 
         await setPassword(srv.authFile, 'a-brand-new-password');
-        const after = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
+        const after = await fetch(`http://127.0.0.1:${port}/_rinnegan/refresh`, { method: 'POST', headers: { cookie: refreshCookie } });
         assert.equal(after.status, 401, 'a rotated password must stop the old session refreshing');
-        const freshLogin = await fetch(`http://127.0.0.1:${port}/login`, {
+        const freshLogin = await fetch(`http://127.0.0.1:${port}/_rinnegan/login`, {
           method: 'POST',
           redirect: 'manual',
           body: new URLSearchParams({ password: 'a-brand-new-password' }),
         });
         assert.equal(freshLogin.status, 302, 'the new password must log in');
         const freshRefresh = getCookiePair(freshLogin, 'rinnegan_rt').split(';')[0];
-        const renewed = await fetch(`http://127.0.0.1:${port}/refresh`, { method: 'POST', headers: { cookie: freshRefresh } });
+        const renewed = await fetch(`http://127.0.0.1:${port}/_rinnegan/refresh`, { method: 'POST', headers: { cookie: freshRefresh } });
         assert.equal(renewed.status, 200, 'a session minted after the rotation must refresh against the new fingerprint');
       });
     });
@@ -428,7 +428,7 @@ async function main() {
     server = startServer(tmp);
     const { port } = await server.ready;
     const base = `http://127.0.0.1:${port}`;
-    const wsUrl = `ws://127.0.0.1:${port}/ws`;
+    const wsUrl = `ws://127.0.0.1:${port}/_rinnegan/ws`;
 
     const get = (p, cookie) => fetch(base + p, { redirect: 'manual', headers: cookie ? { cookie } : {} });
     const post = (p, fields, cookie) => fetch(base + p, {
@@ -441,11 +441,11 @@ async function main() {
     await check('GET / unauthenticated redirects to /login', async () => {
       const res = await get('/');
       assert.equal(res.status, 302);
-      assert.equal(res.headers.get('location'), '/login');
+      assert.equal(res.headers.get('location'), '/_rinnegan/login');
     });
 
     await check('GET /login serves html with a password field and no username field', async () => {
-      const res = await get('/login');
+      const res = await get('/_rinnegan/login');
       assert.equal(res.status, 200);
       assert.ok((res.headers.get('content-type') || '').includes('text/html'));
       const html = await res.text();
@@ -454,36 +454,36 @@ async function main() {
     });
 
     await check('login page ships the silent-resume probe', async () => {
-      const html = await (await get('/login')).text();
-      assert.match(html, /fetch\(\s*['"]\/refresh['"]/, 'login must POST /refresh on load to silently resume a valid session');
+      const html = await (await get('/_rinnegan/login')).text();
+      assert.match(html, /fetch\(\s*['"]\/_rinnegan\/refresh['"]/, 'login must POST /refresh on load to silently resume a valid session');
     });
 
     await check('vendored css and fonts are served (terminal glyphs depend on it)', async () => {
-      const css = await get('/css/jetbrains-mono.css');
+      const css = await get('/_rinnegan/css/jetbrains-mono.css');
       assert.equal(css.status, 200, '/css must be served, else the Nerd Font never loads');
       assert.ok((css.headers.get('content-type') || '').includes('text/css'), '/css wrong content-type');
-      const font = await get('/fonts/JetBrainsMonoNerdFontMono-Regular.woff2');
+      const font = await get('/_rinnegan/fonts/JetBrainsMonoNerdFontMono-Regular.woff2');
       assert.equal(font.status, 200, '/fonts woff2 must be served');
       assert.equal(font.headers.get('content-type'), 'font/woff2', 'woff2 wrong content-type');
     });
 
     await check('POST /login wrong password redirects with error', async () => {
-      const res = await post('/login', { password: 'wrong-password' });
+      const res = await post('/_rinnegan/login', { password: 'wrong-password' });
       assert.equal(res.status, 302);
-      assert.equal(res.headers.get('location'), '/login?error=1');
+      assert.equal(res.headers.get('location'), '/_rinnegan/login?error=1');
       assert.equal(getCookiePair(res, 'rinnegan'), null, 'must not set session cookie on bad login');
     });
 
     await check('POST /login with an empty body is refused', async () => {
-      const res = await post('/login', {});
+      const res = await post('/_rinnegan/login', {});
       assert.equal(res.status, 302);
-      assert.equal(res.headers.get('location'), '/login?error=1');
+      assert.equal(res.headers.get('location'), '/_rinnegan/login?error=1');
       assert.equal(getCookiePair(res, 'rinnegan'), null, 'an empty login must not set a session cookie');
     });
 
     let cookie, refreshCookie;
     await check('POST /login correct sets both HttpOnly cookies and redirects to /', async () => {
-      const res = await post('/login', { password: PASS });
+      const res = await post('/_rinnegan/login', { password: PASS });
       assert.equal(res.status, 302);
       assert.equal(res.headers.get('location'), '/');
       const sc = getCookiePair(res, 'rinnegan');
@@ -494,12 +494,12 @@ async function main() {
       const rt = getCookiePair(res, 'rinnegan_rt');
       assert.ok(rt, 'missing Set-Cookie for rinnegan_rt');
       assert.ok(/httponly/i.test(rt), 'refresh cookie must be HttpOnly');
-      assert.ok(/path=\/refresh/i.test(rt), 'refresh cookie must be scoped to /refresh');
+      assert.ok(/path=\/_rinnegan\/refresh/i.test(rt), 'refresh cookie must be scoped to /refresh');
       refreshCookie = rt.split(';')[0];
     });
 
     await check('POST /refresh with the refresh cookie mints a fresh access cookie', async () => {
-      const res = await post('/refresh', {}, refreshCookie);
+      const res = await post('/_rinnegan/refresh', {}, refreshCookie);
       assert.equal(res.status, 200);
       const sc = getCookiePair(res, 'rinnegan');
       assert.ok(sc, '/refresh must set a fresh access cookie');
@@ -509,7 +509,7 @@ async function main() {
     });
 
     await check('POST /refresh without the refresh cookie is rejected (401)', async () => {
-      const res = await post('/refresh', {});
+      const res = await post('/_rinnegan/refresh', {});
       assert.equal(res.status, 401);
       assert.equal(getCookiePair(res, 'rinnegan'), null, 'a rejected refresh must not set a cookie');
     });
@@ -521,22 +521,22 @@ async function main() {
     });
 
     await check('GET /styles.css and /app.js serve statics', async () => {
-      const css = await get('/styles.css');
+      const css = await get('/_rinnegan/styles.css');
       assert.equal(css.status, 200);
       assert.ok((css.headers.get('content-type') || '').includes('text/css'));
-      const js = await get('/app.js');
+      const js = await get('/_rinnegan/app.js');
       assert.equal(js.status, 200);
       assert.ok((js.headers.get('content-type') || '').includes('text/javascript'));
     });
 
     await check('statics send cache validators; If-None-Match returns 304', async () => {
-      const js = await get('/app.js');
+      const js = await get('/_rinnegan/app.js');
       assert.equal(js.headers.get('cache-control'), 'no-cache', 'app.js must be no-cache');
       const etag = js.headers.get('etag');
       assert.ok(etag, 'app.js missing ETag');
-      const again = await fetch(base + '/app.js', { headers: { 'if-none-match': etag } });
+      const again = await fetch(base + '/_rinnegan/app.js', { headers: { 'if-none-match': etag } });
       assert.equal(again.status, 304, 'matching If-None-Match must 304');
-      const vend = await get('/vendor/xterm.js');
+      const vend = await get('/_rinnegan/vendor/xterm.js');
       assert.equal(vend.status, 200);
       assert.equal(vend.headers.get('cache-control'), 'public, max-age=86400', 'vendor assets must be cacheable');
       assert.ok(vend.headers.get('etag'), 'vendor asset missing ETag');
@@ -553,7 +553,7 @@ async function main() {
       const echo = net.createServer((s) => s.pipe(s));
       await new Promise((r) => echo.listen(0, '127.0.0.1', r));
       const echoPort = echo.address().port;
-      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=${echoPort}`, cookie));
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/_rinnegan/tunnel?port=${echoPort}`, cookie));
       try {
         await c.waitOpen(5000);
         c.ws.send(Buffer.from('E2E_TUNNEL_ROUNDTRIP'));
@@ -565,13 +565,13 @@ async function main() {
     });
 
     await check('unauthenticated /tunnel upgrade rejected (4401)', async () => {
-      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=1`, null));
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/_rinnegan/tunnel?port=1`, null));
       const closed = await c.waitClose(5000, 'unauthenticated tunnel close');
       assert.ok(closed.code === 4401 || closed.code === 1006, `expected 4401 (or 1006), got ${closed.code}`);
     });
 
     await check('/tunnel with a bad port rejected (4400)', async () => {
-      const c = track(new WSClient(`ws://127.0.0.1:${port}/tunnel?port=0`, cookie));
+      const c = track(new WSClient(`ws://127.0.0.1:${port}/_rinnegan/tunnel?port=0`, cookie));
       const closed = await c.waitClose(5000, 'bad-port tunnel close');
       assert.equal(closed.code, 4400, `expected 4400, got ${closed.code}`);
     });
@@ -806,7 +806,7 @@ async function main() {
     let uploadedFile;
 
     await check('POST /upload streams a file to /tmp with a 5-char random prefix', async () => {
-      const res = await fetch(base + '/upload?name=e2e-upload.txt', {
+      const res = await fetch(base + '/_rinnegan/upload?name=e2e-upload.txt', {
         method: 'POST',
         headers: { cookie },
         body: uploadBody,
@@ -823,7 +823,7 @@ async function main() {
     await check('upload sanitizes a hostile filename', async () => {
       const nasty = '../../etc/e2e nasty;$(rm -rf).txt'; // traversal + spaces + shell metachars
       const body = Buffer.from('SANITIZE_BODY_' + rand);
-      const send = () => fetch(base + '/upload?name=' + encodeURIComponent(nasty), {
+      const send = () => fetch(base + '/_rinnegan/upload?name=' + encodeURIComponent(nasty), {
         method: 'POST',
         headers: { cookie },
         body,
@@ -842,14 +842,14 @@ async function main() {
     });
 
     await check('unauthenticated transfer routes are refused', async () => {
-      const up = await fetch(base + '/upload?name=x', { method: 'POST', body: 'nope' });
+      const up = await fetch(base + '/_rinnegan/upload?name=x', { method: 'POST', body: 'nope' });
       assert.equal(up.status, 401);
-      const dl = await fetch(base + '/download?path=/etc/hostname');
+      const dl = await fetch(base + '/_rinnegan/download?path=/etc/hostname');
       assert.equal(dl.status, 401);
     });
 
     await check('GET /download round-trips an uploaded file', async () => {
-      const head = await fetch(base + '/download?path=' + encodeURIComponent(uploadedFile), {
+      const head = await fetch(base + '/_rinnegan/download?path=' + encodeURIComponent(uploadedFile), {
         method: 'HEAD',
         headers: { cookie },
       });
@@ -857,7 +857,7 @@ async function main() {
       assert.equal(head.headers.get('content-length'), String(uploadBody.length));
       assert.ok((head.headers.get('content-disposition') || '').includes('attachment'),
         'download must be sent as an attachment');
-      const res = await fetch(base + '/download?path=' + encodeURIComponent(uploadedFile), {
+      const res = await fetch(base + '/_rinnegan/download?path=' + encodeURIComponent(uploadedFile), {
         headers: { cookie },
       });
       assert.equal(res.status, 200);
@@ -865,12 +865,12 @@ async function main() {
     });
 
     await check('download probe rejects bad paths', async () => {
-      const missing = await fetch(base + '/download?path=/tmp/e2e-missing-' + rand, {
+      const missing = await fetch(base + '/_rinnegan/download?path=/tmp/e2e-missing-' + rand, {
         method: 'HEAD',
         headers: { cookie },
       });
       assert.equal(missing.status, 404);
-      const rel = await fetch(base + '/download?path=relative', { headers: { cookie } });
+      const rel = await fetch(base + '/_rinnegan/download?path=relative', { headers: { cookie } });
       assert.equal(rel.status, 400);
     });
 
@@ -879,7 +879,7 @@ async function main() {
       fs.mkdirSync(dir, { recursive: true });
       uploadedPaths.push(dir);
       fs.writeFileSync(path.join(dir, 'inside.txt'), 'DIR_BODY_' + rand + '\n');
-      const res = await fetch(base + '/download?path=' + encodeURIComponent(dir), { headers: { cookie } });
+      const res = await fetch(base + '/_rinnegan/download?path=' + encodeURIComponent(dir), { headers: { cookie } });
       assert.equal(res.status, 200);
       assert.equal(res.headers.get('content-type'), 'application/gzip');
       assert.ok((res.headers.get('content-disposition') || '').endsWith('.tar.gz"'),
@@ -890,7 +890,7 @@ async function main() {
     });
 
     await check('batch upload lands nested paths under one root and rejects traversal', async () => {
-      const created = await fetch(base + '/upload/batch', {
+      const created = await fetch(base + '/_rinnegan/upload/batch', {
         method: 'POST',
         headers: { cookie, 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'e2e-dir' }),
@@ -900,28 +900,28 @@ async function main() {
       uploadedPaths.push(root);
       assert.match(root, /^\/tmp\/[a-z0-9]{5}-e2e-dir$/, `unexpected root ${root}`);
       const body = Buffer.from('BATCH_BODY_' + rand + '\n');
-      const one = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+      const one = await fetch(base + '/_rinnegan/upload?batch=' + encodeURIComponent(batchId) +
         '&path=' + encodeURIComponent('sub/one.txt'), { method: 'POST', headers: { cookie }, body });
       assert.equal(one.status, 200);
       assert.equal((await one.json()).path, root + '/sub/one.txt');
       assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'batch bytes differ from source');
       // a colliding sibling must fail-closed (409), never silently clobber the first file
-      const collide = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+      const collide = await fetch(base + '/_rinnegan/upload?batch=' + encodeURIComponent(batchId) +
         '&path=' + encodeURIComponent('sub/one.txt'), { method: 'POST', headers: { cookie }, body: 'CLOBBER' });
       assert.equal(collide.status, 409, 'a name collision must be refused, not overwrite');
       assert.equal(fs.readFileSync(root + '/sub/one.txt', 'utf8'), body.toString(), 'the original file must survive a collision');
-      const evil = await fetch(base + '/upload?batch=' + encodeURIComponent(batchId) +
+      const evil = await fetch(base + '/_rinnegan/upload?batch=' + encodeURIComponent(batchId) +
         '&path=' + encodeURIComponent('../evil'), { method: 'POST', headers: { cookie }, body: 'pwned' });
       assert.equal(evil.status, 400, 'traversal must be rejected');
-      const unknown = await fetch(base + '/upload?batch=deadbeef0000dead&path=' + encodeURIComponent('x.txt'),
+      const unknown = await fetch(base + '/_rinnegan/upload?batch=deadbeef0000dead&path=' + encodeURIComponent('x.txt'),
         { method: 'POST', headers: { cookie }, body: 'orphan' });
       assert.equal(unknown.status, 400, 'unknown batch must be rejected');
     });
 
     await check('POST /logout clears the cookie', async () => {
-      const res = await post('/logout', {}, cookie);
+      const res = await post('/_rinnegan/logout', {}, cookie);
       assert.equal(res.status, 302);
-      assert.equal(res.headers.get('location'), '/login');
+      assert.equal(res.headers.get('location'), '/_rinnegan/login');
       const sc = getCookiePair(res, 'rinnegan');
       assert.ok(sc, 'logout missing Set-Cookie');
       assert.ok(/max-age=0/i.test(sc), 'logout cookie must have Max-Age=0');
