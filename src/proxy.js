@@ -28,7 +28,7 @@ export function resolveTarget(segment) {
   return validatePort(segment);
 }
 
-// A root-relative URL an upstream emits resolves against the origin, so the prefix is gone by the time the browser asks for it and the Referer is the only surviving record of which target it belongs to.
+// The prefix is already gone by the time the browser asks for a root-relative URL, leaving the Referer as the only record of which target it belongs to.
 export function refererTarget(referer) {
   if (typeof referer !== 'string' || referer === '') return null;
   let pathname;

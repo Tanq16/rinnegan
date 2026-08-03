@@ -164,7 +164,7 @@ export function createHttpServer({ authenticate, authOn, login, makeSessionCooki
       return notFound(res);
     }
 
-    // Last resort: nothing outside the namespace is rinnegan's, so an unmatched path can only be an upstream's root-relative URL, which lost its prefix when the browser resolved it against the origin. 307 rather than 302 so a POST keeps its method and body.
+    // Nothing outside the namespace is rinnegan's, so an unmatched path can only be an upstream's root-relative URL that lost its prefix when the browser resolved it against the origin.
     if (proxy) {
       const prefix = refererTarget(req.headers.referer);
       if (prefix) {
