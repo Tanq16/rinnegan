@@ -14,23 +14,24 @@ import {
   REQUEST_DROP,
   UPGRADE_DROP,
 } from '../src/proxy.js';
-import { validAliasName, sanitizeAliases } from '../src/proxies.js';
 
 const SESSION = ['rinnegan', 'rinnegan_rt'];
+const PREFIX = '/_rinnegan/proxy/9099';
 
 test('splitProxyPath', async (t) => {
   const cases = [
-    { name: 'bare port with trailing slash', in: '/proxy/8080/', want: { segment: '8080', prefix: '/proxy/8080', rest: '/' } },
-    { name: 'alias with a deep path and query', in: '/proxy/ide/a/b.js?v=1', want: { segment: 'ide', prefix: '/proxy/ide', rest: '/a/b.js?v=1' } },
-    { name: 'no trailing slash leaves an empty rest', in: '/proxy/ide', want: { segment: 'ide', prefix: '/proxy/ide', rest: '' } },
-    { name: 'query directly on the segment', in: '/proxy/ide?x=1', want: { segment: 'ide', prefix: '/proxy/ide', rest: '?x=1' } },
-    { name: 'fragment directly on the segment', in: '/proxy/ide#top', want: { segment: 'ide', prefix: '/proxy/ide', rest: '#top' } },
-    { name: 'percent-encoding in the path is preserved verbatim', in: '/proxy/ide/a%20b', want: { segment: 'ide', prefix: '/proxy/ide', rest: '/a%20b' } },
-    { name: 'empty segment', in: '/proxy/', want: null },
-    { name: 'empty segment with a path', in: '/proxy//x', want: null },
-    { name: 'not a proxy path', in: '/download?path=/x', want: null },
-    // /proxies must not be swallowed by the /proxy/ prefix or the management API becomes unreachable.
-    { name: 'the management route is not a proxy path', in: '/proxies', want: null },
+    { name: 'port with trailing slash', in: '/_rinnegan/proxy/8080/', want: { segment: '8080', prefix: '/_rinnegan/proxy/8080', rest: '/' } },
+    { name: 'deep path with a query', in: '/_rinnegan/proxy/8080/a/b.js?v=1', want: { segment: '8080', prefix: '/_rinnegan/proxy/8080', rest: '/a/b.js?v=1' } },
+    { name: 'no trailing slash leaves an empty rest', in: '/_rinnegan/proxy/8080', want: { segment: '8080', prefix: '/_rinnegan/proxy/8080', rest: '' } },
+    { name: 'query directly on the segment', in: '/_rinnegan/proxy/8080?x=1', want: { segment: '8080', prefix: '/_rinnegan/proxy/8080', rest: '?x=1' } },
+    { name: 'fragment directly on the segment', in: '/_rinnegan/proxy/8080#top', want: { segment: '8080', prefix: '/_rinnegan/proxy/8080', rest: '#top' } },
+    { name: 'percent-encoding in the path is preserved verbatim', in: '/_rinnegan/proxy/8080/a%20b', want: { segment: '8080', prefix: '/_rinnegan/proxy/8080', rest: '/a%20b' } },
+    { name: 'empty segment', in: '/_rinnegan/proxy/', want: null },
+    { name: 'empty segment with a path', in: '/_rinnegan/proxy//x', want: null },
+    // The un-namespaced spelling must not resolve, or an upstream serving its own /proxy/ tree would be hijacked.
+    { name: 'a bare /proxy/ path is not rinnegan\'s', in: '/proxy/8080/', want: null },
+    { name: 'another namespaced route is not a proxy path', in: '/_rinnegan/download?path=/x', want: null },
+    { name: 'an upstream path outside the namespace', in: '/static/app.js', want: null },
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
@@ -48,86 +49,25 @@ test('needsTrailingSlash', async (t) => {
 });
 
 test('resolveTarget', async (t) => {
-  const aliases = { ide: 8080, notes: 3000 };
-
-  await t.test('a numeric segment resolves as a port without consulting aliases', () => {
-    assert.equal(resolveTarget('8080', {}), 8080);
-  });
-
-  await t.test('a named segment resolves through the alias table', () => {
-    assert.equal(resolveTarget('ide', aliases), 8080);
-  });
-
-  await t.test('an unknown name does not resolve', () => {
-    assert.equal(resolveTarget('nope', aliases), null);
-  });
-
-  // Inherited keys are truthy on any object literal, so a bare lookup would resolve /proxy/constructor to a function.
-  await t.test('inherited object properties never resolve', () => {
-    for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
-      assert.equal(resolveTarget(name, aliases), null, `${name} must not resolve`);
-    }
+  await t.test('a port at each end of the range resolves', () => {
+    assert.equal(resolveTarget('1'), 1);
+    assert.equal(resolveTarget('65535'), 65535);
   });
 
   await t.test('out-of-range ports do not resolve', () => {
     for (const seg of ['0', '65536', '99999']) {
-      assert.equal(resolveTarget(seg, aliases), null, `${seg} must not resolve`);
+      assert.equal(resolveTarget(seg), null, `${seg} must not resolve`);
     }
   });
 
-  // A zero-padded segment stays on the port branch, so it can never fall through to an alias of the same spelling.
+  await t.test('a non-numeric segment does not resolve', () => {
+    for (const seg of ['ide', '', '80a', '-1', '8.0', 'constructor']) {
+      assert.equal(resolveTarget(seg), null, `${seg} must not resolve`);
+    }
+  });
+
   await t.test('leading zeros resolve to the same port', () => {
-    assert.equal(resolveTarget('007700', aliases), 7700);
-  });
-
-  await t.test('a port at each end of the range resolves', () => {
-    assert.equal(resolveTarget('1', {}), 1);
-    assert.equal(resolveTarget('65535', {}), 65535);
-  });
-});
-
-test('validAliasName', async (t) => {
-  const cases = [
-    { name: 'simple word', in: 'ide', want: true },
-    { name: 'digits and dashes', in: 'my-app2', want: true },
-    { name: 'single character', in: 'a', want: true },
-    // An all-digit alias is dead on arrival: resolveTarget takes the port branch first.
-    { name: 'all digits is unreachable', in: '8080', want: false },
-    { name: 'leading dash', in: '-ide', want: false },
-    { name: 'uppercase', in: 'IDE', want: false },
-    { name: 'path separator', in: 'a/b', want: false },
-    { name: 'traversal', in: '..', want: false },
-    { name: 'dot', in: 'my.app', want: false },
-    { name: 'empty', in: '', want: false },
-    { name: 'over 32 characters', in: 'a'.repeat(33), want: false },
-    { name: 'exactly 32 characters', in: 'a'.repeat(32), want: true },
-    { name: 'not a string', in: 8080, want: false },
-  ];
-  for (const c of cases) {
-    await t.test(c.name, () => {
-      assert.equal(validAliasName(c.in), c.want);
-    });
-  }
-});
-
-test('sanitizeAliases', async (t) => {
-  await t.test('drops entries that could never resolve and keeps the rest', () => {
-    const got = sanitizeAliases({ ide: 8080, '8080': 22, BAD: 80, deep: 0, ok: '3000', 'a/b': 90 });
-    assert.deepEqual({ ...got }, { ide: 8080, ok: 3000 });
-  });
-
-  await t.test('a numeric string port is normalized to a number', () => {
-    assert.equal(sanitizeAliases({ ok: '3000' }).ok, 3000);
-  });
-
-  await t.test('non-object input yields an empty table', () => {
-    for (const bad of [null, [], 'x', 42, undefined]) {
-      assert.deepEqual({ ...sanitizeAliases(bad) }, {});
-    }
-  });
-
-  await t.test('the result has no prototype, so inherited keys cannot leak in', () => {
-    assert.equal(Object.getPrototypeOf(sanitizeAliases({ ide: 8080 })), null);
+    assert.equal(resolveTarget('007700'), 7700);
   });
 });
 
@@ -152,10 +92,10 @@ test('stripCookies', async (t) => {
 
 test('rewriteLocation', async (t) => {
   const cases = [
-    { name: 'root-relative gets the prefix', in: '/login', want: '/proxy/ide/login' },
-    { name: 'root-relative with query', in: '/a?b=1', want: '/proxy/ide/a?b=1' },
-    { name: 'an absolute upstream URL is folded back under the prefix', in: 'http://127.0.0.1:8080/a?b=1#c', want: '/proxy/ide/a?b=1#c' },
-    { name: 'localhost is treated as the same upstream', in: 'http://localhost:8080/a', want: '/proxy/ide/a' },
+    { name: 'root-relative gets the prefix', in: '/login', want: `${PREFIX}/login` },
+    { name: 'root-relative with query', in: '/a?b=1', want: `${PREFIX}/a?b=1` },
+    { name: 'an absolute upstream URL is folded back under the prefix', in: 'http://127.0.0.1:9099/a?b=1#c', want: `${PREFIX}/a?b=1#c` },
+    { name: 'localhost is treated as the same upstream', in: 'http://localhost:9099/a', want: `${PREFIX}/a` },
     // Rewriting an off-host redirect would silently proxy a third party through the session.
     { name: 'an external absolute URL is left alone', in: 'https://example.com/x', want: 'https://example.com/x' },
     { name: 'a different local port is left alone', in: 'http://127.0.0.1:9999/a', want: 'http://127.0.0.1:9999/a' },
@@ -165,86 +105,72 @@ test('rewriteLocation', async (t) => {
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
-      assert.equal(rewriteLocation(c.in, '/proxy/ide', 8080), c.want);
+      assert.equal(rewriteLocation(c.in, PREFIX, 9099), c.want);
     });
   }
 });
 
 test('rewriteCookiePath', async (t) => {
   const cases = [
-    { name: 'root path is scoped under the prefix', in: 'a=1; Path=/; HttpOnly', want: 'a=1; Path=/proxy/ide/; HttpOnly' },
-    { name: 'a sub-path is scoped under the prefix', in: 'a=1; Path=/api', want: 'a=1; Path=/proxy/ide/api' },
+    { name: 'root path is scoped under the prefix', in: 'a=1; Path=/; HttpOnly', want: `a=1; Path=${PREFIX}/; HttpOnly` },
+    { name: 'a sub-path is scoped under the prefix', in: 'a=1; Path=/api', want: `a=1; Path=${PREFIX}/api` },
     // A cookie with no Path defaults to the request directory, which is already inside the prefix, but making it explicit keeps it off sibling targets.
-    { name: 'a cookie with no Path gets one', in: 'a=1; HttpOnly', want: 'a=1; HttpOnly; Path=/proxy/ide/' },
-    { name: 'lowercase attribute is matched', in: 'a=1; path=/', want: 'a=1; Path=/proxy/ide/' },
-    { name: 'a relative Path value is left alone rather than corrupted', in: 'a=1; Path=x', want: 'a=1; Path=x; Path=/proxy/ide/' },
-    { name: 'other attributes survive', in: 'a=1; Path=/; Secure; SameSite=Lax', want: 'a=1; Path=/proxy/ide/; Secure; SameSite=Lax' },
+    { name: 'a cookie with no Path gets one', in: 'a=1; HttpOnly', want: `a=1; HttpOnly; Path=${PREFIX}/` },
+    { name: 'lowercase attribute is matched', in: 'a=1; path=/', want: `a=1; Path=${PREFIX}/` },
+    { name: 'a relative Path value is left alone rather than corrupted', in: 'a=1; Path=x', want: `a=1; Path=x; Path=${PREFIX}/` },
+    { name: 'other attributes survive', in: 'a=1; Path=/; Secure; SameSite=Lax', want: `a=1; Path=${PREFIX}/; Secure; SameSite=Lax` },
   ];
   for (const c of cases) {
     await t.test(c.name, () => {
-      assert.equal(rewriteCookiePath(c.in, '/proxy/ide'), c.want);
+      assert.equal(rewriteCookiePath(c.in, PREFIX), c.want);
     });
   }
 });
 
 test('refererTarget', async (t) => {
-  const aliases = { ide: 9099 };
-  const from = (referer, dest) => refererTarget(referer, dest, aliases);
-
-  await t.test('a subresource from a proxied page recovers its prefix', () => {
-    assert.equal(from('https://term.example.com/proxy/ide/docs/readme.md', 'script'), '/proxy/ide');
-  });
-
-  await t.test('a bare port target is recovered too', () => {
-    assert.equal(from('https://term.example.com/proxy/9099/a/b', 'image'), '/proxy/9099');
+  await t.test('a request from a proxied page recovers its prefix', () => {
+    assert.equal(refererTarget('https://term.example.com/_rinnegan/proxy/9099/docs/readme.md'), PREFIX);
   });
 
   await t.test('a query or fragment on the referring page does not disturb the prefix', () => {
-    assert.equal(from('https://term.example.com/proxy/ide/a?x=1#y', 'style'), '/proxy/ide');
+    assert.equal(refererTarget('https://term.example.com/_rinnegan/proxy/9099/a?x=1#y'), PREFIX);
   });
 
-  // Following a link out of a proxied page must still reach rinnegan's own UI.
-  await t.test('a document navigation is never captured', () => {
-    assert.equal(from('https://term.example.com/proxy/ide/docs/readme.md', 'document'), null);
+  await t.test('the target page itself, with no path, still resolves', () => {
+    assert.equal(refererTarget('https://term.example.com/_rinnegan/proxy/9099/'), PREFIX);
   });
 
   await t.test('a referrer from rinnegan\'s own pages is not a proxy context', () => {
-    for (const r of ['https://term.example.com/', 'https://term.example.com/login', 'https://term.example.com/proxies']) {
-      assert.equal(from(r, 'script'), null, `${r} must not resolve`);
+    for (const r of ['https://term.example.com/', 'https://term.example.com/_rinnegan/login']) {
+      assert.equal(refererTarget(r), null, `${r} must not resolve`);
     }
   });
 
-  // Redirecting to a target that no longer resolves would answer a 404 one round trip later.
-  await t.test('a referrer naming an unknown target does not redirect', () => {
-    assert.equal(from('https://term.example.com/proxy/gone/x', 'script'), null);
-    assert.equal(from('https://term.example.com/proxy/99999/x', 'script'), null);
+  // Redirecting to a target that cannot resolve would answer a 404 one round trip later.
+  await t.test('a referrer naming an unusable target does not redirect', () => {
+    assert.equal(refererTarget('https://term.example.com/_rinnegan/proxy/99999/x'), null);
+    assert.equal(refererTarget('https://term.example.com/_rinnegan/proxy/ide/x'), null);
   });
 
   await t.test('a missing or malformed referrer is ignored', () => {
-    for (const r of [undefined, '', 'not a url', '/proxy/ide/x']) {
-      assert.equal(from(r, 'script'), null, `${JSON.stringify(r)} must not resolve`);
+    for (const r of [undefined, '', 'not a url', '/_rinnegan/proxy/9099/x']) {
+      assert.equal(refererTarget(r), null, `${JSON.stringify(r)} must not resolve`);
     }
-  });
-
-  // Sec-Fetch-Dest is absent on older browsers and non-browser clients; only an explicit document opts out.
-  await t.test('an absent Sec-Fetch-Dest still recovers the prefix', () => {
-    assert.equal(from('https://term.example.com/proxy/ide/a', undefined), '/proxy/ide');
   });
 });
 
 test('forwardHeaders', async (t) => {
-  const base = { cookieNames: SESSION, prefix: '/proxy/ide', port: 8080, proto: 'https', remote: '10.0.0.1' };
+  const base = { cookieNames: SESSION, prefix: PREFIX, port: 9099, proto: 'https', remote: '10.0.0.1' };
   const build = (headers, drop = REQUEST_DROP) => forwardHeaders(headers, { ...base, drop });
 
   await t.test('the upstream sees its own address as Host and the original as X-Forwarded-Host', () => {
-    const got = build({ host: 'terminal.example.com' });
-    assert.equal(got.host, '127.0.0.1:8080');
-    assert.equal(got['x-forwarded-host'], 'terminal.example.com');
+    const got = build({ host: 'term.example.com' });
+    assert.equal(got.host, '127.0.0.1:9099');
+    assert.equal(got['x-forwarded-host'], 'term.example.com');
   });
 
   await t.test('session cookies never reach the upstream', () => {
-    const got = build({ cookie: 'rinnegan=secret; theme=dark' });
-    assert.equal(got.cookie, 'theme=dark');
+    assert.equal(build({ cookie: 'rinnegan=secret; theme=dark' }).cookie, 'theme=dark');
   });
 
   await t.test('a cookie header of only session cookies is dropped entirely', () => {
@@ -261,7 +187,7 @@ test('forwardHeaders', async (t) => {
 
   await t.test('an upstream-facing prefix and proto are always set', () => {
     const got = build({});
-    assert.equal(got['x-forwarded-prefix'], '/proxy/ide');
+    assert.equal(got['x-forwarded-prefix'], PREFIX);
     assert.equal(got['x-forwarded-proto'], 'https');
   });
 
@@ -287,29 +213,29 @@ test('forwardHeaders', async (t) => {
 
 test('responseHeaders', async (t) => {
   await t.test('hop-by-hop headers are not passed back to the browser', () => {
-    const got = responseHeaders({ connection: 'keep-alive', 'transfer-encoding': 'chunked', 'content-type': 'text/html' }, '/proxy/ide', 8080);
+    const got = responseHeaders({ connection: 'keep-alive', 'transfer-encoding': 'chunked', 'content-type': 'text/html' }, PREFIX, 9099);
     assert.deepEqual(got, { 'content-type': 'text/html' });
   });
 
   await t.test('every Set-Cookie in a multi-cookie response is scoped', () => {
-    const got = responseHeaders({ 'set-cookie': ['a=1; Path=/', 'b=2; Path=/api'] }, '/proxy/ide', 8080);
-    assert.deepEqual(got['set-cookie'], ['a=1; Path=/proxy/ide/', 'b=2; Path=/proxy/ide/api']);
+    const got = responseHeaders({ 'set-cookie': ['a=1; Path=/', 'b=2; Path=/api'] }, PREFIX, 9099);
+    assert.deepEqual(got['set-cookie'], [`a=1; Path=${PREFIX}/`, `b=2; Path=${PREFIX}/api`]);
   });
 
   await t.test('a single-string Set-Cookie is still returned as an array', () => {
-    const got = responseHeaders({ 'set-cookie': 'a=1; Path=/' }, '/proxy/ide', 8080);
-    assert.deepEqual(got['set-cookie'], ['a=1; Path=/proxy/ide/']);
+    const got = responseHeaders({ 'set-cookie': 'a=1; Path=/' }, PREFIX, 9099);
+    assert.deepEqual(got['set-cookie'], [`a=1; Path=${PREFIX}/`]);
   });
 
   await t.test('a redirect is rewritten in place', () => {
-    assert.equal(responseHeaders({ location: '/login' }, '/proxy/ide', 8080).location, '/proxy/ide/login');
+    assert.equal(responseHeaders({ location: '/login' }, PREFIX, 9099).location, `${PREFIX}/login`);
   });
 });
 
 test('serializeUpgrade', async (t) => {
   await t.test('emits a request line and CRLF-terminated headers ending in a blank line', () => {
-    const got = serializeUpgrade('GET', '/socket', { host: '127.0.0.1:8080', upgrade: 'websocket' });
-    assert.equal(got, 'GET /socket HTTP/1.1\r\nhost: 127.0.0.1:8080\r\nupgrade: websocket\r\n\r\n');
+    const got = serializeUpgrade('GET', '/socket', { host: '127.0.0.1:9099', upgrade: 'websocket' });
+    assert.equal(got, 'GET /socket HTTP/1.1\r\nhost: 127.0.0.1:9099\r\nupgrade: websocket\r\n\r\n');
   });
 
   // Node hands repeated headers back as an array; joining them would send one malformed line.

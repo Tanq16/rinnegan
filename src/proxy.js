@@ -2,6 +2,7 @@ import { request } from 'node:http';
 import { connect } from 'node:net';
 import { pipeline } from 'node:stream';
 import { validatePort } from './tunnel.js';
+import { PROXY_BASE } from './paths.js';
 
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'proxy-authorization', 'proxy-authenticate'];
 export const REQUEST_DROP = new Set([...HOP_BY_HOP, 'upgrade']);
@@ -10,28 +11,25 @@ export const UPGRADE_DROP = new Set(HOP_BY_HOP.filter((h) => h !== 'connection')
 const RESPONSE_DROP = new Set(HOP_BY_HOP);
 
 export function splitProxyPath(url) {
-  const base = '/proxy/';
-  if (!url.startsWith(base)) return null;
-  const after = url.slice(base.length);
+  if (!url.startsWith(PROXY_BASE)) return null;
+  const after = url.slice(PROXY_BASE.length);
   const cut = after.search(/[/?#]/);
   const segment = cut === -1 ? after : after.slice(0, cut);
   if (!segment) return null;
-  return { segment, prefix: base + segment, rest: cut === -1 ? '' : after.slice(cut) };
+  return { segment, prefix: PROXY_BASE + segment, rest: cut === -1 ? '' : after.slice(cut) };
 }
 
-// Without the trailing slash every relative URL the upstream emits resolves one segment too high, so /proxy/ide must land on /proxy/ide/.
+// Without the trailing slash every relative URL the upstream emits resolves one segment too high, so a bare target path must land on its own directory.
 export function needsTrailingSlash(rest) {
   return rest === '' || rest.startsWith('?') || rest.startsWith('#');
 }
 
-export function resolveTarget(segment, aliases) {
-  if (/^\d+$/.test(segment)) return validatePort(segment);
-  return Object.hasOwn(aliases, segment) ? aliases[segment] : null;
+export function resolveTarget(segment) {
+  return validatePort(segment);
 }
 
-// A root-relative URL an upstream emits resolves against the origin, so the prefix is gone by the time the browser asks for it and the Referer is the only surviving record of which target it belongs to. Document navigations are excluded so following a link out of a proxied page still reaches rinnegan's own UI.
-export function refererTarget(referer, fetchDest, aliases) {
-  if (fetchDest === 'document') return null;
+// A root-relative URL an upstream emits resolves against the origin, so the prefix is gone by the time the browser asks for it and the Referer is the only surviving record of which target it belongs to.
+export function refererTarget(referer) {
   if (typeof referer !== 'string' || referer === '') return null;
   let pathname;
   try {
@@ -41,7 +39,7 @@ export function refererTarget(referer, fetchDest, aliases) {
   }
   const split = splitProxyPath(pathname);
   if (!split) return null;
-  return resolveTarget(split.segment, aliases) === null ? null : split.prefix;
+  return resolveTarget(split.segment) === null ? null : split.prefix;
 }
 
 export function stripCookies(header, names) {
@@ -123,7 +121,7 @@ export function serializeUpgrade(method, path, headers) {
   return lines.join('\r\n') + '\r\n\r\n';
 }
 
-export function attachProxy({ aliases, cookieNames, secure }) {
+export function attachProxy({ cookieNames, secure }) {
   const proto = secure ? 'https' : 'http';
 
   function fail(res, status, message) {
@@ -133,9 +131,9 @@ export function attachProxy({ aliases, cookieNames, secure }) {
   }
 
   function handleRequest(req, res, split) {
-    const port = resolveTarget(split.segment, aliases);
+    const port = resolveTarget(split.segment);
     if (port === null) return fail(res, 404, 'no such proxy target');
-    // 307, not 302: a POST to a bare /proxy/<target> would otherwise be reissued as a GET with its body dropped.
+    // 307, not 302: a POST to a bare target path would otherwise be reissued as a GET with its body dropped.
     if (needsTrailingSlash(split.rest)) {
       res.writeHead(307, { Location: `${split.prefix}/${split.rest}` });
       return res.end();
@@ -161,7 +159,7 @@ export function attachProxy({ aliases, cookieNames, secure }) {
   }
 
   function handleUpgrade(req, socket, head, split, session) {
-    const port = resolveTarget(split.segment, aliases);
+    const port = resolveTarget(split.segment);
     if (port === null) return socket.destroy();
     const upstream = connect(port, '127.0.0.1');
     let closed = false;

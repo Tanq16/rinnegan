@@ -11,7 +11,7 @@ import { createHttpServer } from './http.js';
 import { attachWebSocket } from './ws.js';
 import { attachTunnel } from './tunnel.js';
 import { attachProxy, splitProxyPath } from './proxy.js';
-import { createAliasStore } from './proxies.js';
+import { NS, PROXY_BASE } from './paths.js';
 import { info, error } from './log.js';
 
 function startCaddy(root, flags) {
@@ -103,11 +103,10 @@ export function start(cfg, flags = {}) {
     shell: cfg.terminal.shell,
   };
 
-  const terminal = attachWebSocket({ config: cfg, authenticate, authOn, host, currentFingerprint });
+  const terminal = attachWebSocket({ config: cfg, authenticate, authOn, host, currentFingerprint, proxyOn: cfg.proxy.enabled });
 
-  const aliases = cfg.proxy.enabled ? createAliasStore(path.join(configDir(), 'proxies.json')) : null;
-  const proxy = aliases
-    ? attachProxy({ aliases: aliases.entries, cookieNames: [cfg.cookie.name, refreshCookieName], secure: cfg.cookie.secure })
+  const proxy = cfg.proxy.enabled
+    ? attachProxy({ cookieNames: [cfg.cookie.name, refreshCookieName], secure: cfg.cookie.secure })
     : null;
 
   const refresh = noAuth
@@ -146,25 +145,24 @@ export function start(cfg, flags = {}) {
       serializeCookie(
         refreshCookieName,
         signSession({ fp, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
-        { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: '/refresh' }
+        { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: NS + '/refresh' }
       ),
     ],
     clearSessionCookie: () => [
       serializeCookie(cfg.cookie.name, '', { maxAge: 0, secure: cfg.cookie.secure }),
-      serializeCookie(refreshCookieName, '', { maxAge: 0, secure: cfg.cookie.secure, path: '/refresh' }),
+      serializeCookie(refreshCookieName, '', { maxAge: 0, secure: cfg.cookie.secure, path: NS + '/refresh' }),
     ],
     refresh,
     publicDir,
     proxy,
-    aliases,
   });
   const tunnel = attachTunnel({ authenticate });
   server.on('upgrade', (req, socket, head) => {
     let pathname;
     try { ({ pathname } = new URL(req.url, 'http://x')); } catch { socket.destroy(); return; }
-    if (pathname === '/ws') { terminal.handleUpgrade(req, socket, head); return; }
-    if (pathname === '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
-    if (proxy && pathname.startsWith('/proxy/')) {
+    if (pathname === NS + '/ws') { terminal.handleUpgrade(req, socket, head); return; }
+    if (pathname === NS + '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
+    if (proxy && pathname.startsWith(PROXY_BASE)) {
       const session = authenticate(req);
       const split = session && splitProxyPath(req.url);
       if (!split) { socket.destroy(); return; }
