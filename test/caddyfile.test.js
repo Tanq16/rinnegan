@@ -44,14 +44,6 @@ test('bundled Caddyfile template', async (t) => {
     );
   });
 
-  await t.test('sends Referrer-Policy same-origin in every bundled Caddyfile', () => {
-    for (const name of ['Caddyfile', 'Caddyfile.domain.example', 'Caddyfile.wildcard.example']) {
-      const body = readFileSync(fileURLToPath(new URL(`../launcher/${name}`, import.meta.url)), 'utf8');
-      // no-referrer strips the Referer the proxy recovers a root-relative target from, and every such asset then 404s with nothing logged.
-      assert.match(body, /Referrer-Policy same-origin/, `${name} must not withhold the same-origin Referer`);
-    }
-  });
-
   await t.test('keeps the intermediate longer than the leaf so the leaf is not clamped', () => {
     const leaf = template.match(/issuer internal \{\s*lifetime (\d+[hd])/)[1];
     const intermediate = template.match(/intermediate_lifetime (\d+[hd])/);

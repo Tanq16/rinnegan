@@ -66,7 +66,7 @@ export function parseTunnelConfig(raw) {
 
 function login({ server, password, insecure }) {
   return new Promise((resolve, reject) => {
-    const url = new URL('/_rinnegan/login', server);
+    const url = new URL('/login', server);
     const transport = url.protocol === 'https:' ? https : http;
     const body = new URLSearchParams({ password }).toString();
     const req = transport.request(url, {
@@ -148,7 +148,7 @@ export async function runTunnels({ server, mappings, password, insecure }) {
   const listeners = [];
   try {
     for (const { local, remote } of normalized) {
-      const tunnelUrl = `${wsBase}/_rinnegan/tunnel?port=${remote}`;
+      const tunnelUrl = `${wsBase}/tunnel?port=${remote}`;
       const listener = createServer((socket) => {
         pipe(new WebSocket(tunnelUrl, { headers: { Cookie: session.cookie }, rejectUnauthorized: !insecure }), socket, remote, refreshCookie);
       });

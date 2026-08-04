@@ -6,18 +6,18 @@
   <title>Sign in — Rinnegan</title>
   <!-- The login page loads no app.js, so the theme picked in the control panel has to be applied here. -->
   <script>try { document.documentElement.dataset.theme = localStorage.getItem('rinnegan.theme') || 'mocha'; } catch {}</script>
-  <link rel="stylesheet" href="/_rinnegan/css/inter.css">
-  <link rel="stylesheet" href="/_rinnegan/css/jetbrains-mono.css">
-  <link rel="stylesheet" href="/_rinnegan/styles.css">
+  <link rel="stylesheet" href="/css/inter.css">
+  <link rel="stylesheet" href="/css/jetbrains-mono.css">
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="login-page">
   <main class="login-card">
     <div class="login-brand">
-      <img src="/_rinnegan/logo.svg" alt="Rinnegan" class="login-logo">
+      <img src="/logo.svg" alt="Rinnegan" class="login-logo">
       <span class="login-wordmark">Rinnegan</span>
     </div>
     <p class="error" id="login-error" hidden>Invalid password.</p>
-    <form method="post" action="/_rinnegan/login">
+    <form method="post" action="/login">
       <label>Password
         <input type="password" name="password" autocomplete="current-password" autofocus required>
       </label>
@@ -26,7 +26,7 @@
   </main>
   <script>
     // Silent resume: a still-valid refresh cookie lands straight in the app, no password.
-    fetch('/_rinnegan/refresh', { method: 'POST' }).then((r) => { if (r.ok) location.replace('/'); }).catch(() => {});
+    fetch('/refresh', { method: 'POST' }).then((r) => { if (r.ok) location.replace('/'); }).catch(() => {});
   </script>
   <script>
     if (new URLSearchParams(location.search).get('error') === '1')

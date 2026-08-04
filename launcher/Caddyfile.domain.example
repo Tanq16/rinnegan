@@ -35,8 +35,7 @@ term.example.com {
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
-		# same-origin, not no-referrer: /proxy recovers a root-relative request's target from the Referer, and no-referrer strips the only record of it. Cross-origin referrers are still withheld.
-		Referrer-Policy same-origin
+		Referrer-Policy no-referrer
 		X-Robots-Tag noindex
 		-Server
 	}

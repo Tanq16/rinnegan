@@ -10,8 +10,6 @@ import { loadRecord, verify, fingerprint } from './password.js';
 import { createHttpServer } from './http.js';
 import { attachWebSocket } from './ws.js';
 import { attachTunnel } from './tunnel.js';
-import { attachProxy, splitProxyPath } from './proxy.js';
-import { NS, PROXY_BASE } from './paths.js';
 import { info, error } from './log.js';
 
 function startCaddy(root, flags) {
@@ -103,11 +101,7 @@ export function start(cfg, flags = {}) {
     shell: cfg.terminal.shell,
   };
 
-  const terminal = attachWebSocket({ config: cfg, authenticate, authOn, host, currentFingerprint, proxyOn: cfg.proxy.enabled });
-
-  const proxy = cfg.proxy.enabled
-    ? attachProxy({ cookieNames: [cfg.cookie.name, refreshCookieName], secure: cfg.cookie.secure })
-    : null;
+  const terminal = attachWebSocket({ config: cfg, authenticate, authOn, host, currentFingerprint });
 
   const refresh = noAuth
     ? () => ({ accessExpiresAt: null })
@@ -145,30 +139,22 @@ export function start(cfg, flags = {}) {
       serializeCookie(
         refreshCookieName,
         signSession({ fp, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
-        { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: NS + '/refresh' }
+        { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: '/refresh' }
       ),
     ],
     clearSessionCookie: () => [
       serializeCookie(cfg.cookie.name, '', { maxAge: 0, secure: cfg.cookie.secure }),
-      serializeCookie(refreshCookieName, '', { maxAge: 0, secure: cfg.cookie.secure, path: NS + '/refresh' }),
+      serializeCookie(refreshCookieName, '', { maxAge: 0, secure: cfg.cookie.secure, path: '/refresh' }),
     ],
     refresh,
     publicDir,
-    proxy,
   });
   const tunnel = attachTunnel({ authenticate });
   server.on('upgrade', (req, socket, head) => {
     let pathname;
     try { ({ pathname } = new URL(req.url, 'http://x')); } catch { socket.destroy(); return; }
-    if (pathname === NS + '/ws') { terminal.handleUpgrade(req, socket, head); return; }
-    if (pathname === NS + '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
-    if (proxy && pathname.startsWith(PROXY_BASE)) {
-      const session = authenticate(req);
-      const split = session && splitProxyPath(req.url);
-      if (!split) { socket.destroy(); return; }
-      proxy.handleUpgrade(req, socket, head, split, session);
-      return;
-    }
+    if (pathname === '/ws') { terminal.handleUpgrade(req, socket, head); return; }
+    if (pathname === '/tunnel') { tunnel.handleUpgrade(req, socket, head); return; }
     socket.destroy();
   });
 

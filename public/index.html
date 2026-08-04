@@ -6,13 +6,13 @@
   <title>Rinnegan</title>
   <!-- Inline and here: applying the stored theme from the deferred app.js instead would paint the default first. -->
   <script>try { document.documentElement.dataset.theme = localStorage.getItem('rinnegan.theme') || 'mocha'; } catch {}</script>
-  <link rel="stylesheet" href="/_rinnegan/css/inter.css">
-  <link rel="stylesheet" href="/_rinnegan/css/jetbrains-mono.css">
-  <link rel="stylesheet" href="/_rinnegan/vendor/xterm.css">
-  <link rel="stylesheet" href="/_rinnegan/styles.css">
-  <script defer src="/_rinnegan/vendor/xterm.js"></script>
-  <script defer src="/_rinnegan/vendor/addon-webgl.js"></script>
-  <script defer src="/_rinnegan/app.js"></script>
+  <link rel="stylesheet" href="/css/inter.css">
+  <link rel="stylesheet" href="/css/jetbrains-mono.css">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/vendor/xterm.js"></script>
+  <script defer src="/vendor/addon-webgl.js"></script>
+  <script defer src="/app.js"></script>
 </head>
 <body>
   <div id="stage"><div id="terminal"></div></div>
@@ -51,18 +51,6 @@
         as <code>.tar.gz</code>.</p>
     </section>
 
-    <section id="proxy-section" hidden>
-      <h3>Proxy</h3>
-      <div class="row">
-        <input id="proxy-port" type="text" inputmode="numeric" placeholder="port" spellcheck="false" autocomplete="off">
-        <button id="proxy-open" type="button">Open</button>
-      </div>
-      <p id="proxy-error" class="upload-error" hidden></p>
-      <p class="hint">Opens an HTTP server running on this host in a new tab. Nothing to set up
-        &mdash; type the port it listens on. HTTP and WebSocket only; reach anything else with
-        the CLI tunnel.</p>
-    </section>
-
     <section>
       <h3>Keys</h3>
       <div class="row">
@@ -90,7 +78,7 @@
         &mdash; programs running inside the shell keep their own colors.</p>
     </section>
 
-    <form method="post" action="/_rinnegan/logout" id="logout-form"><button type="submit">Log out</button></form>
+    <form method="post" action="/logout" id="logout-form"><button type="submit">Log out</button></form>
   </aside>
 
   <div id="exit-card" hidden>
