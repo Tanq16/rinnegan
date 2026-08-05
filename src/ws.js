@@ -5,7 +5,6 @@ import { error } from './log.js';
 const STALE_MS = 90000;
 const PING_INTERVAL_MS = 25000;
 const GRACE_SECONDS = 60;
-const MAX_MISSED_REFRESHES = 4;
 const MAX_CREDENTIAL_FAILURES = 4;
 // Cap the per-socket send queue so a stalled client's backlog cannot exhaust server memory.
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
@@ -15,9 +14,9 @@ export function evaluateSocket(meta, nowMs, currentFingerprint, accessTtlSeconds
   const nowSec = Math.floor(nowMs / 1000);
   if (nowSec <= meta.deadline + GRACE_SECONDS) return 'ping'; // Infinity (no-auth) never reaches the credential
   if (currentFingerprint() !== meta.fp) return 'close';
-  if (meta.missedRefreshes >= MAX_MISSED_REFRESHES) return 'close';
+  // No refresh counter: a frozen tab stops POSTing /refresh, and a socket proven live by pings must not die for it.
+  if (nowSec >= meta.sessionExp) return 'close';
   meta.deadline += accessTtlSeconds;
-  meta.missedRefreshes++;
   return 'slide';
 }
 
@@ -32,13 +31,11 @@ export function evaluateSocketSafe(meta, nowMs, currentFingerprint, accessTtlSec
   }
 }
 
-// The only reset of missedRefreshes: a real client /refresh proves the refresh cookie is still valid.
 export function refreshMeta(meta, newExp) {
   meta.deadline = newExp;
-  meta.missedRefreshes = 0;
 }
 
-// Only sockets on the refreshed credential: re-arming a rotated-out socket would push its deadline past the fuse forever, so it would never reach the fingerprint check.
+// Only sockets on the refreshed credential: re-arming a rotated-out socket would push its deadline forward forever, so it would never reach the fingerprint check.
 export function refreshSockets(sockets, fp, newExp) {
   for (const meta of sockets.values()) {
     if (meta.fp === fp) refreshMeta(meta, newExp);
@@ -148,7 +145,7 @@ export function attachWebSocket({ config, authenticate, authOn, host, currentFin
       fp: session.fp ?? null,
       lastSeen: Date.now(),
       deadline: typeof session.accessExp === 'number' ? session.accessExp : Infinity,
-      missedRefreshes: 0,
+      sessionExp: typeof session.sessionExp === 'number' ? session.sessionExp : Infinity,
       credentialFailures: 0,
       epoch: 0,
       pty: null,

@@ -33,6 +33,20 @@ test('signSession/verifySession round trip', () => {
   assert.ok(!('sub' in payload) && !('role' in payload), 'the collapsed token must carry no identity claims');
 });
 
+test('signSession carries sxp only when it is a number', async (t) => {
+  await t.test('a numeric sxp survives the round trip', () => {
+    const sxp = now() + 604800;
+    assert.equal(verifySession(signSession({ fp: FP, typ: 'access', sxp }, SECRET, 3600), SECRET).sxp, sxp);
+  });
+
+  for (const [name, sxp] of [['absent', undefined], ['a string', '123'], ['null', null]]) {
+    await t.test(`${name} sxp is omitted rather than forged into the payload`, () => {
+      const payload = verifySession(signSession({ fp: FP, typ: 'access', sxp }, SECRET, 3600), SECRET);
+      assert.ok(!('sxp' in payload), 'a non-numeric sxp must not reach the signed payload');
+    });
+  }
+});
+
 test('verifySession enforces the expected token type', () => {
   const access = signSession({ fp: FP, typ: 'access' }, SECRET, 3600);
   const refresh = signSession({ fp: FP, typ: 'refresh' }, SECRET, 3600);
