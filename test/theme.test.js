@@ -12,14 +12,13 @@ const APP = read('app.js');
 const DEFAULT_THEME = 'mocha';
 // The tokens public/app.js reads out of the computed style to build the xterm palette; a missing one reaches xterm as ''.
 const ANSI_HUES = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
-const TERMINAL_TOKENS = [
-  '--bg', '--fg', '--cursor', '--selection', '--on-selection',
-  ...ANSI_HUES.map((c) => '--' + c), ...ANSI_HUES.map((c) => '--bright-' + c),
-];
+const ANSI_SLOTS = [...ANSI_HUES.map((c) => '--' + c), ...ANSI_HUES.map((c) => '--bright-' + c)];
+const TERMINAL_TOKENS = ['--bg', '--fg', '--cursor', '--selection', '--on-selection', ...ANSI_SLOTS];
 
 const themes = new Map();
 for (const [, name, body] of CSS.matchAll(/\[data-theme="([a-z-]+)"\][^{]*\{([^}]*)\}/g)) {
-  themes.set(name, { tokens: new Set(body.match(/--[a-z-]+(?=\s*:)/g) ?? []), body });
+  const values = new Map([...body.matchAll(/(--[a-z-]+)\s*:\s*([^;]+);/g)].map(([, k, val]) => [k, val.trim()]));
+  themes.set(name, { tokens: new Set(values.keys()), values, body });
 }
 
 const options = [...HTML.matchAll(/<option value="([a-z-]+)">/g)].map((m) => m[1]);
@@ -44,6 +43,17 @@ test('theme palettes', async (t) => {
   await t.test('every theme is dark and says so, so native controls follow it', () => {
     for (const [name, { body }] of themes) {
       assert.match(body, /color-scheme:\s*dark\s*;/, `${name} does not declare color-scheme: dark`);
+    }
+  });
+
+  await t.test('every theme fills all sixteen ANSI slots with a distinct color', () => {
+    for (const [name, { values }] of themes) {
+      const seen = new Map();
+      for (const slot of ANSI_SLOTS) {
+        const hex = values.get(slot);
+        assert.ok(!seen.has(hex), `${name} repeats ${hex} in ${seen.get(hex)} and ${slot}`);
+        seen.set(hex, slot);
+      }
     }
   });
 

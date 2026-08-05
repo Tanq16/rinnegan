@@ -1,4 +1,5 @@
-/* The status roles are deliberately not the ANSI slots of the same hue — Gruvbox's normal ANSI set is its dim one, legible in a terminal cell but muddy as UI text. */
+/* The status roles are deliberately not the ANSI slots of the same hue — Gruvbox's normal ANSI set is its dim one, legible in a terminal cell but muddy as UI text.
+   Most schemes also publish one value per hue and repeat it in the bright slot; those brights are lightened here instead, so all 16 stay addressable to anything drawing in ANSI 0-15. */
 
 /* Mocha's values mirror the kitty config in cli-Productivity-Suite; changing them de-syncs the web terminal from the native one. */
 :root,
@@ -11,8 +12,8 @@
   --cursor: #f5e0dc; --selection: #f5e0dc; --on-selection: #1e1e2e;
   --black: #45475a; --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af;
   --blue: #89b4fa; --magenta: #f5c2e7; --cyan: #94e2d5; --white: #bac2de;
-  --bright-black: #585b70; --bright-red: #f38ba8; --bright-green: #a6e3a1; --bright-yellow: #f9e2af;
-  --bright-blue: #89b4fa; --bright-magenta: #f5c2e7; --bright-cyan: #94e2d5; --bright-white: #a6adc8;
+  --bright-black: #585b70; --bright-red: #eba0ac; --bright-green: #b2f5ad; --bright-yellow: #fab387;
+  --bright-blue: #74c7ec; --bright-magenta: #cba6f7; --bright-cyan: #89dceb; --bright-white: #a6adc8;
 }
 
 :root[data-theme="gruvbox-dark"] {
@@ -50,8 +51,8 @@
   --cursor: #d8dee9; --selection: #434c5e; --on-selection: #eceff4;
   --black: #3b4252; --red: #bf616a; --green: #a3be8c; --yellow: #ebcb8b;
   --blue: #81a1c1; --magenta: #b48ead; --cyan: #88c0d0; --white: #e5e9f0;
-  --bright-black: #4c566a; --bright-red: #bf616a; --bright-green: #a3be8c; --bright-yellow: #ebcb8b;
-  --bright-blue: #81a1c1; --bright-magenta: #b48ead; --bright-cyan: #8fbcbb; --bright-white: #eceff4;
+  --bright-black: #4c566a; --bright-red: #e07781; --bright-green: #b5d39c; --bright-yellow: #fedb95;
+  --bright-blue: #95b8db; --bright-magenta: #cda3c6; --bright-cyan: #8fbcbb; --bright-white: #eceff4;
 }
 
 :root[data-theme="one-dark"] {
@@ -63,8 +64,8 @@
   --cursor: #528bff; --selection: #3e4451; --on-selection: #abb2bf;
   --black: #282c34; --red: #e06c75; --green: #98c379; --yellow: #e5c07b;
   --blue: #61afef; --magenta: #c678dd; --cyan: #56b6c2; --white: #abb2bf;
-  --bright-black: #5c6370; --bright-red: #e06c75; --bright-green: #98c379; --bright-yellow: #e5c07b;
-  --bright-blue: #61afef; --bright-magenta: #c678dd; --bright-cyan: #56b6c2; --bright-white: #ffffff;
+  --bright-black: #5c6370; --bright-red: #ff818a; --bright-green: #a9d887; --bright-yellow: #fad185;
+  --bright-blue: #7fc4ff; --bright-magenta: #e18bfb; --bright-cyan: #64cddb; --bright-white: #ffffff;
 }
 
 :root[data-theme="tokyo-night"] {
@@ -89,8 +90,8 @@
   --cursor: #d3c6aa; --selection: #475258; --on-selection: #d3c6aa;
   --black: #343f44; --red: #e67e80; --green: #a7c080; --yellow: #dbbc7f;
   --blue: #7fbbb3; --magenta: #d699b6; --cyan: #83c092; --white: #d3c6aa;
-  --bright-black: #868d80; --bright-red: #e67e80; --bright-green: #a7c080; --bright-yellow: #dbbc7f;
-  --bright-blue: #7fbbb3; --bright-magenta: #d699b6; --bright-cyan: #83c092; --bright-white: #d3c6aa;
+  --bright-black: #868d80; --bright-red: #ff9495; --bright-green: #b9d58e; --bright-yellow: #f0ce8b;
+  --bright-blue: #8fd1c8; --bright-magenta: #efabcb; --bright-cyan: #93d6a3; --bright-white: #e6d7b9;
 }
 
 :root[data-theme="kanagawa"] {
@@ -115,8 +116,8 @@
   --cursor: #f8f8f0; --selection: #49483e; --on-selection: #f8f8f2;
   --black: #272822; --red: #f92672; --green: #a6e22e; --yellow: #f4bf75;
   --blue: #66d9ef; --magenta: #ae81ff; --cyan: #a1efe4; --white: #f8f8f2;
-  --bright-black: #75715e; --bright-red: #f92672; --bright-green: #a6e22e; --bright-yellow: #f4bf75;
-  --bright-blue: #66d9ef; --bright-magenta: #ae81ff; --bright-cyan: #a1efe4; --bright-white: #f9f8f5;
+  --bright-black: #75715e; --bright-red: #ff6d91; --bright-green: #b3f52b; --bright-yellow: #ffd297;
+  --bright-blue: #81eaff; --bright-magenta: #c0a2ff; --bright-cyan: #aafff3; --bright-white: #ffffff;
 }
 
 :root[data-theme="rose-pine"] {
@@ -128,11 +129,11 @@
   --cursor: #e0def4; --selection: #403d52; --on-selection: #e0def4;
   --black: #26233a; --red: #eb6f92; --green: #31748f; --yellow: #f6c177;
   --blue: #9ccfd8; --magenta: #c4a7e7; --cyan: #ebbcba; --white: #e0def4;
-  --bright-black: #6e6a86; --bright-red: #eb6f92; --bright-green: #31748f; --bright-yellow: #f6c177;
-  --bright-blue: #9ccfd8; --bright-magenta: #c4a7e7; --bright-cyan: #ebbcba; --bright-white: #e0def4;
+  --bright-black: #6e6a86; --bright-red: #ff8ba9; --bright-green: #4992b0; --bright-yellow: #ffd59c;
+  --bright-blue: #aae2ec; --bright-magenta: #d9b9ff; --bright-cyan: #ffccca; --bright-white: #eeedff;
 }
 
-/* Solarized spends its bright slots on the base greys, so bright black really does equal --bg here. */
+/* Solarized spends its bright slots on the base greys, and upstream slot 8 is the background itself; it sits on the base02-base01 axis here so dim UI drawn in ANSI 8 stays visible. */
 :root[data-theme="solarized-dark"] {
   color-scheme: dark;
   --bg: #002b36; --surface: #00212b; --inset: #001920; --raised: #073642;
@@ -142,7 +143,7 @@
   --cursor: #93a1a1; --selection: #073642; --on-selection: #93a1a1;
   --black: #073642; --red: #dc322f; --green: #859900; --yellow: #b58900;
   --blue: #268bd2; --magenta: #d33682; --cyan: #2aa198; --white: #eee8d5;
-  --bright-black: #002b36; --bright-red: #cb4b16; --bright-green: #586e75; --bright-yellow: #657b83;
+  --bright-black: #4c666d; --bright-red: #cb4b16; --bright-green: #586e75; --bright-yellow: #657b83;
   --bright-blue: #839496; --bright-magenta: #6c71c4; --bright-cyan: #93a1a1; --bright-white: #fdf6e3;
 }
 
