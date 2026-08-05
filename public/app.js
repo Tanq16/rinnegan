@@ -373,6 +373,12 @@
     els.pStatus.dataset.state = s;
   }
 
+  function setPanel(open) {
+    els.panel.classList.toggle('open', open);
+    els.toggle.setAttribute('aria-expanded', String(open));
+    if (!open && term) term.focus();
+  }
+
   function toast(msg) {
     els.toast.textContent = msg;
     els.toast.hidden = false;
@@ -627,10 +633,9 @@
   }
 
   function init() {
-    els.toggle.addEventListener('click', () => {
-      const open = els.panel.classList.toggle('open');
-      els.toggle.setAttribute('aria-expanded', String(open));
-    });
+    els.toggle.addEventListener('click', () => setPanel(!els.panel.classList.contains('open')));
+    // The overlays are siblings of #stage, not children, so a click inside the upload modal never reaches this.
+    els.stage.addEventListener('pointerdown', () => setPanel(false));
 
     // No hide here: a spawn failure answers with `error`, and the card must stay up to be retried.
     els.startBtn.addEventListener('click', sendStart);

@@ -41,9 +41,9 @@ test('theme palettes', async (t) => {
     }
   });
 
-  await t.test('every theme sets color-scheme so native controls follow it', () => {
+  await t.test('every theme is dark and says so, so native controls follow it', () => {
     for (const [name, { body }] of themes) {
-      assert.match(body, /color-scheme:\s*(light|dark)\s*;/, `${name} does not set color-scheme`);
+      assert.match(body, /color-scheme:\s*dark\s*;/, `${name} does not declare color-scheme: dark`);
     }
   });
 
