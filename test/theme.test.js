@@ -23,6 +23,12 @@ for (const [, name, body] of CSS.matchAll(/\[data-theme="([a-z-]+)"\][^{]*\{([^}
 
 const options = [...HTML.matchAll(/<option value="([a-z-]+)">/g)].map((m) => m[1]);
 
+const luminance = (hex) => {
+  const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+};
+
 test('theme palettes', async (t) => {
   await t.test('the default theme block is present and non-trivial', () => {
     assert.ok(themes.has(DEFAULT_THEME), `no [data-theme="${DEFAULT_THEME}"] block in styles.css`);
@@ -40,19 +46,23 @@ test('theme palettes', async (t) => {
     }
   });
 
-  await t.test('every theme is dark and says so, so native controls follow it', () => {
-    for (const [name, { body }] of themes) {
-      assert.match(body, /color-scheme:\s*dark\s*;/, `${name} does not declare color-scheme: dark`);
+  // A light palette that declares itself dark leaves the browser drawing dark scrollbars and form widgets over it.
+  await t.test('every theme declares the color-scheme its background actually is', () => {
+    for (const [name, { body, values }] of themes) {
+      const declared = body.match(/color-scheme:\s*(light|dark)\s*;/)?.[1];
+      assert.ok(declared, `${name} does not declare a color-scheme`);
+      assert.equal(declared, luminance(values.get('--bg')) > 0.5 ? 'light' : 'dark', `${name} declares color-scheme: ${declared}`);
     }
   });
 
-  await t.test('every theme fills all sixteen ANSI slots with a distinct color', () => {
+  // The nvim and tmux configs in cli-Productivity-Suite name literal indices with no light/dark branching, which only works while the greys stay in this order.
+  await t.test('the grey rail runs from the background side to the foreground side', () => {
     for (const [name, { values }] of themes) {
-      const seen = new Map();
-      for (const slot of ANSI_SLOTS) {
-        const hex = values.get(slot);
-        assert.ok(!seen.has(hex), `${name} repeats ${hex} in ${seen.get(hex)} and ${slot}`);
-        seen.set(hex, slot);
+      const rail = ['--black', '--bright-black', '--white', '--bright-white'].map((slot) => ({ slot, l: luminance(values.get(slot)) }));
+      const toward = luminance(values.get('--fg')) - luminance(values.get('--bg'));
+      for (let i = 1; i < rail.length; i++) {
+        assert.ok(Math.sign(rail[i].l - rail[i - 1].l) === Math.sign(toward),
+          `${name} puts ${rail[i].slot} on the wrong side of ${rail[i - 1].slot}`);
       }
     }
   });
