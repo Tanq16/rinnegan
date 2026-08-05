@@ -58,6 +58,8 @@ export function signSession(claims, secret, ttlSeconds) {
     exp: now + ttlSeconds,
     sid: randomBytes(8).toString('hex'),
   };
+  // A /ws upgrade never carries the refresh cookie (Path=/refresh), so the session's end must ride the access token.
+  if (typeof claims.sxp === 'number') payload.sxp = claims.sxp;
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return body + '.' + hmac(body, secret).toString('base64url');
 }

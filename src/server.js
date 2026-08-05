@@ -86,10 +86,11 @@ export function start(cfg, flags = {}) {
   const refreshCookieName = cfg.cookie.name + '_rt';
 
   const authenticate = noAuth
-    ? () => ({ accessExp: null })
+    ? () => ({ accessExp: null, sessionExp: null })
     : (req) => {
         const payload = verifySession(parseCookies(req.headers.cookie)[cfg.cookie.name], secret, 'access');
-        return payload ? { fp: payload.fp, accessExp: payload.exp } : null;
+        if (!payload) return null;
+        return { fp: payload.fp, accessExp: payload.exp, sessionExp: typeof payload.sxp === 'number' ? payload.sxp : payload.exp };
       };
 
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
@@ -115,7 +116,7 @@ export function start(cfg, flags = {}) {
         const exp = now + cfg.cookie.accessTtlSeconds;
         const setCookie = serializeCookie(
           cfg.cookie.name,
-          signSession({ fp, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
+          signSession({ fp, typ: 'access', sxp: payload.exp }, secret, cfg.cookie.accessTtlSeconds),
           { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
         );
         terminal.touchAll(fp, exp);
@@ -130,18 +131,21 @@ export function start(cfg, flags = {}) {
       return record ? fingerprint(record, secret) : null;
     },
     // Access cookie MUST be first: the CLI tunnel client extracts the first Set-Cookie pair.
-    makeSessionCookie: (fp) => [
-      serializeCookie(
-        cfg.cookie.name,
-        signSession({ fp, typ: 'access' }, secret, cfg.cookie.accessTtlSeconds),
-        { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
-      ),
-      serializeCookie(
-        refreshCookieName,
-        signSession({ fp, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
-        { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: '/refresh' }
-      ),
-    ],
+    makeSessionCookie: (fp) => {
+      const sxp = Math.floor(Date.now() / 1000) + cfg.cookie.refreshTtlSeconds;
+      return [
+        serializeCookie(
+          cfg.cookie.name,
+          signSession({ fp, typ: 'access', sxp }, secret, cfg.cookie.accessTtlSeconds),
+          { maxAge: cfg.cookie.accessTtlSeconds, secure: cfg.cookie.secure }
+        ),
+        serializeCookie(
+          refreshCookieName,
+          signSession({ fp, typ: 'refresh' }, secret, cfg.cookie.refreshTtlSeconds),
+          { maxAge: cfg.cookie.refreshTtlSeconds, secure: cfg.cookie.secure, path: '/refresh' }
+        ),
+      ];
+    },
     clearSessionCookie: () => [
       serializeCookie(cfg.cookie.name, '', { maxAge: 0, secure: cfg.cookie.secure }),
       serializeCookie(refreshCookieName, '', { maxAge: 0, secure: cfg.cookie.secure, path: '/refresh' }),
