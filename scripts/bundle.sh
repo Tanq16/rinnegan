@@ -3,7 +3,6 @@
 set -euo pipefail
 
 NODE_VERSION=24.17.0
-CADDY_VERSION=2.11.4
 
 die() {
   echo "bundle.sh: error: $*" >&2
@@ -31,7 +30,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-for req in bin src public node_modules launcher/rinnegan launcher/Caddyfile launcher/Caddyfile.domain.example LICENSE README.md docs/exposing.md package.json scripts/update.sh; do
+for req in bin src public node_modules launcher/rinnegan LICENSE README.md docs/exposing.md package.json scripts/update.sh; do
   [ -e "$REPO_ROOT/$req" ] || die "missing required repo path: $req"
 done
 
@@ -101,41 +100,8 @@ NODE_BIN_SRC="$NODE_EXTRACT_DIR/$NODE_PKG/bin/node"
 cp "$NODE_BIN_SRC" "$BUNDLE_ROOT/runtime/bin/node"
 chmod 755 "$BUNDLE_ROOT/runtime/bin/node"
 
-# Caddy's release naming differs from ours: darwin->mac, x64->amd64.
-case "$OS" in
-  darwin) CADDY_OS="mac" ;;
-  linux)  CADDY_OS="linux" ;;
-esac
-case "$ARCH" in
-  x64)   CADDY_ARCH="amd64" ;;
-  arm64) CADDY_ARCH="arm64" ;;
-esac
-CADDY_PKG="caddy_${CADDY_VERSION}_${CADDY_OS}_${CADDY_ARCH}"
-CADDY_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/${CADDY_PKG}.tar.gz"
-CADDY_TARBALL="$BUILD_ROOT/${CADDY_PKG}.tar.gz"
-
-echo "==> Downloading Caddy: $CADDY_URL"
-curl -fL -o "$CADDY_TARBALL" "$CADDY_URL" || die "failed to download Caddy from $CADDY_URL"
-
-echo "==> Extracting Caddy"
-CADDY_EXTRACT_DIR="$BUILD_ROOT/caddy-extract"
-mkdir -p "$CADDY_EXTRACT_DIR"
-tar xf "$CADDY_TARBALL" -C "$CADDY_EXTRACT_DIR"
-
-CADDY_BIN_SRC="$CADDY_EXTRACT_DIR/caddy"
-CADDY_LICENSE_SRC="$CADDY_EXTRACT_DIR/LICENSE"
-
-[ -f "$CADDY_BIN_SRC" ] || die "caddy binary not found at $CADDY_BIN_SRC"
-cp "$CADDY_BIN_SRC" "$BUNDLE_ROOT/bin/caddy"
-chmod 755 "$BUNDLE_ROOT/bin/caddy"
-
-cp "$REPO_ROOT/launcher/Caddyfile" "$BUNDLE_ROOT/Caddyfile"
-# Sample only: resolveCaddyfile never seeds this, so a real-domain setup points --caddyfile at it.
-cp "$REPO_ROOT/launcher/Caddyfile.domain.example" "$BUNDLE_ROOT/Caddyfile.domain.example"
-
-# Copy licenses unconditionally so set -e aborts on a missing one rather than silently shipping a bundle without a promised license.
+# Copy the license unconditionally so set -e aborts on a missing one rather than silently shipping a bundle without a promised license.
 mkdir -p "$BUNDLE_ROOT/licenses"
-cp "$CADDY_LICENSE_SRC" "$BUNDLE_ROOT/licenses/caddy-LICENSE"
 cp "$NODE_EXTRACT_DIR/$NODE_PKG/LICENSE" "$BUNDLE_ROOT/licenses/node-LICENSE"
 
 TARBALL="$DIST_DIR/${BUNDLE_NAME}.tar.gz"

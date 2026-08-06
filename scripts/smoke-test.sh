@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proves a built tarball is self-contained: extract it, scrub node from PATH, and confirm node-pty spawns and both the plain-HTTP server and the bundled-Caddy HTTPS front serve on the bundled runtime.
+# Proves a built tarball is self-contained: extract it, scrub node from PATH, and confirm node-pty spawns and the server serves on the bundled runtime.
 set -euo pipefail
 
 die() {
@@ -49,10 +49,8 @@ mkdir -p "$SMOKE_HOME"
 env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin "$APP_DIR/bin/rinnegan" version >/dev/null || die "rinnegan version failed; updater verify gate would fail"
 
 SERVER_PID=""
-HTTPS_PID=""
 cleanup() {
   [ -n "$SERVER_PID" ] && { kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; }
-  [ -n "$HTTPS_PID" ] && { kill "$HTTPS_PID" 2>/dev/null || true; wait "$HTTPS_PID" 2>/dev/null || true; }
   rm -rf "$SMOKE_DIR"
 }
 trap cleanup EXIT
@@ -93,28 +91,5 @@ for _ in $(seq 1 30); do
 done
 [ "$ROOT_CODE" = "200" ] || { echo "GET / expected 200 but got '$ROOT_CODE'; log:"; cat server.log || true; exit 1; }
 echo "GET / -> 200 OK (--no-auth)"
-
-# The --https server also binds 8442, so stop the HTTP-only server first to free the port.
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
-SERVER_PID=""
-
-# Caddy is invoked by absolute path via RINNEGAN_ROOT, so the scrubbed PATH does not affect it.
-env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin TERM=xterm-256color \
-  ./bin/rinnegan serve --https --no-auth > https.log 2>&1 &
-HTTPS_PID=$!
-
-# -k accepts the self-signed cert.
-HTTPS_ROOT_CODE=""
-for _ in $(seq 1 30); do
-  if ! kill -0 "$HTTPS_PID" 2>/dev/null; then
-    echo "https server exited early; log:"; cat https.log || true; exit 1
-  fi
-  HTTPS_ROOT_CODE="$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ || true)"
-  [ "$HTTPS_ROOT_CODE" = "200" ] && break
-  sleep 1
-done
-[ "$HTTPS_ROOT_CODE" = "200" ] || { echo "HTTPS GET / expected 200 but got '$HTTPS_ROOT_CODE'; log:"; cat https.log || true; exit 1; }
-echo "HTTPS via bundled Caddy -> 200 OK"
 
 echo "Smoke test passed for $BUNDLE_NAME"

@@ -6,22 +6,20 @@ import { start } from '../src/server.js';
 import { runTunnel, runTunnels, parseTunnelConfig, validatePort } from '../src/tunnel-client.js';
 
 const USAGE = `usage:
-  rinnegan serve [--https] [--no-auth] [--shell zsh|bash|fish] [--refresh-caddyfile]
-  (--https serves via the bundled Caddy with a self-signed cert on :8443)
+  rinnegan serve [--no-auth] [--shell zsh|bash|fish]
   (--no-auth disables all authentication; anyone who reaches the port gets a host shell)
   (--shell overrides terminal.shell from config.json; anything else is a startup error)
-  (--refresh-caddyfile overwrites the runtime Caddyfile from the shipped template, discarding local edits)
   rinnegan tunnel --server <url> --local <port> --remote <port> [--insecure]
   (forwards localhost:<local> to the server's localhost:<remote> over an authenticated WebSocket)
   rinnegan tunnel --config <path> [--insecure]
   (forwards every mapping in a JSON config: { "server": <url>, "ports": ["<local>:<remote>", ...] })
-  (--insecure skips TLS verification, for the bundled self-signed Caddy cert or a bare IP)
+  (--insecure skips TLS verification, for a self-signed proxy cert or a bare IP)
   rinnegan passwd
   (sets the single login password, creating auth.json on first use)
   rinnegan version
 `;
 
-const BOOLEAN_FLAGS = new Set(['https', 'no-auth', 'refresh-caddyfile', 'insecure']);
+const BOOLEAN_FLAGS = new Set(['no-auth', 'insecure']);
 
 function usageExit() {
   process.stderr.write(USAGE);

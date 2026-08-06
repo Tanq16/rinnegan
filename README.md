@@ -25,7 +25,6 @@ It is **not** an IDE, a task manager, or a tmux manager — just a terminal fron
 - **Eleven dark color schemes** — Catppuccin Mocha, Gruvbox Dark, Dracula, Nord, One Dark, Tokyo Night, Everforest, Kanagawa, Monokai, Rosé Pine, and Solarized Dark, switched from the control panel and remembered per browser. See [Theme and fonts](#theme-and-fonts).
 - **Authenticated port tunnel** — forward your `localhost:<port>` to a `localhost` port on the server over an authenticated WebSocket (`rinnegan tunnel`) — `ssh -L` without SSH. See [CLI](#cli).
 - **Host file transfer** — upload a clipboard image, a file, or a whole folder to `/tmp` over HTTP and get the path to paste (nothing is typed into your terminal); download any host file or directory, directories as `.tar.gz`. See [File transfer](#file-transfer).
-- **Bundled self-signed HTTPS** — optional `serve --https` runs Caddy as a managed child to terminate TLS, with zero extra downloads.
 - **Self-contained tarball** — each release bundles its own Node runtime and a platform-native `node-pty`; the host needs no Node, Python, compiler, or `make`.
 - **Password + ephemeral-session auth** — a scrypt-hashed password, HMAC-signed cookies with a per-boot secret, no persisted revocation list.
 
@@ -48,7 +47,7 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan
 ```
 
-`./bin/rinnegan` with no subcommand runs the server (same as `serve`); it binds `127.0.0.1:8442` and runs as the invoking user. Each tarball is self-contained — its own Node runtime, a platform-native `node-pty`, the `bin/caddy` binary for [HTTPS](#serving-over-https), and third-party licenses under `licenses/` — so the host needs no Node, Python, compiler, or `make`.
+`./bin/rinnegan` with no subcommand runs the server (same as `serve`); it binds `127.0.0.1:8442` and runs as the invoking user. Each tarball is self-contained — its own Node runtime, a platform-native `node-pty`, and third-party licenses under `licenses/` — so the host needs no Node, Python, compiler, or `make`.
 
 **First run seeds no password.** Set one before serving — this is a shell on your machine, so pick a real password (input is never echoed):
 
@@ -96,14 +95,14 @@ npm run dev   # dev server reading ~/.config/rinnegan, restart on change
 
 ## Configuration
 
-All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of the process working directory): `config.json` is self-seeded from the built-in defaults on first run (mode 0600), `auth.json` is operator-created via [`passwd`](#cli) and never auto-seeded (mode 0600), and `caddy-data/` (under `serve --https`) sits alongside. `config.json` is deep-merged over the built-in defaults, so set only what you change.
+All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of the process working directory): `config.json` is self-seeded from the built-in defaults on first run (mode 0600), and `auth.json` is operator-created via [`passwd`](#cli) and never auto-seeded (mode 0600). `config.json` is deep-merged over the built-in defaults, so set only what you change.
 
 | Field | Default | Notes |
 | ----- | ------- | ----- |
-| `listen.host` | `127.0.0.1` | Bind localhost; put HTTPS in front for exposure |
+| `listen.host` | `127.0.0.1` | Bind localhost; put a TLS proxy in front for exposure |
 | `listen.port` | `8442` | |
 | `cookie.name` | `rinnegan` | Session cookie (HttpOnly, SameSite=Lax, Path=/) |
-| `cookie.secure` | `false` | Set `true` over HTTPS; auto-forced under `serve --https` |
+| `cookie.secure` | `false` | Set `true` once TLS is in front; rinnegan cannot detect it |
 | `cookie.accessTtlSeconds` | `10800` | Access cookie lifetime; 60–604800 |
 | `cookie.refreshTtlSeconds` | `604800` | Refresh cookie lifetime (scoped to `/refresh`); minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace into `(file, args)`; no shell quoting. `--shell` overrides it |
@@ -114,7 +113,7 @@ All state lives in **`~/.config/rinnegan/`** (created mode 0700, regardless of t
 
 - **Shell.** Defaults to `/usr/bin/env zsh -l`; zsh isn't preinstalled on some minimal Linux distros, so install it, pass `--shell bash`, or point `terminal.shell` at an existing shell. The config value is split on whitespace into executable + args with no shell quoting, so keep args simple.
 - **Session secret.** The HMAC signing secret is regenerated on every boot and never persisted — restarting invalidates all sessions and you re-log in (deliberate; there is no revocation list). Nothing else is server-written.
-- **Exposing beyond localhost.** Put HTTPS in front (see [Security](#security)) and set `cookie.secure: true`.
+- **Exposing beyond localhost.** Put a TLS-terminating proxy in front and set `cookie.secure: true` — see [docs/exposing.md](docs/exposing.md).
 
 ## How it works
 
@@ -161,7 +160,7 @@ The launcher forwards its arguments straight to the bundled server:
 
 ```
 ./bin/rinnegan                              # start the server (default: serve)
-./bin/rinnegan serve [--https] [--no-auth] [--shell zsh|bash|fish] [--refresh-caddyfile]
+./bin/rinnegan serve [--no-auth] [--shell zsh|bash|fish]
 ./bin/rinnegan passwd                       # set the single login password
 ./bin/rinnegan tunnel --server <url> --local <port> --remote <port> [--insecure]  # forward a local port to the server
 ./bin/rinnegan tunnel --config <path> [--insecure]  # forward many ports from a JSON config
@@ -171,12 +170,12 @@ Password prompts are never echoed. `auth.json` is re-read on every login, so `pa
 
 `--shell` accepts exactly **`zsh`**, **`bash`**, or **`fish`**, each expanding to `/usr/bin/env <name> -l`. Anything else is a startup error rather than a silent fallback — landing in the wrong shell just looks like a broken config. Precedence is `--shell` > `terminal.shell` in `config.json` > the default `/usr/bin/env zsh -l`; `terminal.shell` still takes an arbitrary command string, so the allowlist costs no capability. The binary's existence is not pre-flighted: a missing shell surfaces as a spawn error the first time you start a terminal.
 
-`tunnel` forwards your `localhost:<local>` to the server's `localhost:<remote>` over an authenticated WebSocket (password prompted; `--insecure` accepts Caddy's self-signed cert or a bare IP); `--refresh-caddyfile` reseeds the runtime Caddyfile from the bundled template, discarding local edits.
+`tunnel` forwards your `localhost:<local>` to the server's `localhost:<remote>` over an authenticated WebSocket (password prompted; `--insecure` accepts a self-signed proxy cert or a bare IP).
 
 `--config` forwards several ports over one login instead of a single `--local`/`--remote` pair. The file names the server once and lists the mappings (see `tunnel.example.json`); each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"` (same on both sides), or a `[<local>, <remote>]` pair:
 
 ```json
-{ "server": "https://example.com:8443", "ports": ["8080:80", "5432:5432", "3000"] }
+{ "server": "https://term.example.com", "ports": ["8080:80", "5432:5432", "3000"] }
 ```
 
 ### Security
@@ -191,28 +190,12 @@ Password prompts are never echoed. `auth.json` is re-read on every login, so `pa
 - **No password is seeded on first run** — set one with `passwd` and make it a strong one; `serve` refuses to start without `auth.json` unless `--no-auth` is set.
 - `~/.config/rinnegan` and its `config.json` and `auth.json` should be readable only by the running user (rinnegan creates the directory mode 0700 and those files mode 0600).
 
-Recommended shape when exposing it: `browser → Caddy (HTTPS) → localhost-bound rinnegan`. The bundled wrapper below is the fastest way there.
+#### Exposing it
 
-#### Serving over HTTPS
+Rinnegan serves plain HTTP and terminates no TLS. It ships no certificate machinery and has no opinion about what sits in front of it, because a box that is worth exposing usually already has a proxy — nginx, Caddy, Traefik, an ingress, a Cloudflare or Tailscale tunnel — and one it did not choose is just another thing to keep patched.
 
-```sh
-./bin/rinnegan serve --https
-```
+The shape is `browser → your TLS proxy → localhost-bound rinnegan`. What rinnegan needs from that proxy is ordinary: WebSocket upgrades passed through, no request-body cap or read timeout (uploads stream unbounded), and `cookie.secure: true` set once TLS is in front.
 
-Each tarball bundles a stock **Caddy 2.11.4** (Apache-2.0; license at `licenses/caddy-LICENSE`). This runs it as a **managed child process** listening on `0.0.0.0:8443` and reverse-proxying to `127.0.0.1:8442`, so rinnegan itself stays localhost-only. Browse to **https://\<host\>:8443**, accept the one-time self-signed warning, and log in. `cookie.secure` is forced to `true` in this mode.
+**See [docs/exposing.md](docs/exposing.md)** — it carries copy-paste Caddy and nginx configs for both a self-signed LAN certificate and a real Let's Encrypt domain, the certificate-lifetime settings worth keeping, and the challenge trade-offs (TLS-ALPN-01 vs. HTTP-01 vs. DNS-01).
 
-The point of this mode is not the reverse proxy — it is getting a **secure browser context** on a box with no domain, which is what [clipboard upload](#file-transfer) and `cookie.secure` need. On a LAN box or a homelab VM there is no other way there.
-
-- **Certificate:** issued by Caddy's internal CA, so browsers warn on first visit. The warning returns whenever the leaf rotates, because browsers pin a click-through exception to that leaf's fingerprint — the bundled `Caddyfile` therefore pins a 30-day leaf instead of Caddy's 12-hour default. To be rid of the warning entirely, install the CA root (`~/.config/rinnegan/caddy-data/caddy/pki/authorities/local/root.crt`) in each client's trust store; it is stable for 10 years, so rotation stops mattering. Upgrading from an older release keeps your existing runtime Caddyfile — pass `serve --https --refresh-caddyfile` once to pick up the new lifetime.
-- **State:** Caddy's CA and certs live in `~/.config/rinnegan/caddy-data/`, and its config is the runtime `~/.config/rinnegan/Caddyfile` (seeded from the bundled template on the first `--https` run, never clobbered after); delete `caddy-data/` and restart to regenerate the CA.
-- **Ports:** if you change `listen.port`, edit `~/.config/rinnegan/Caddyfile`'s `reverse_proxy` target to match — that runtime copy persists across updates (`serve --https` warns if the port is not `8442`). The bundled template only reseeds when you pass `serve --https --refresh-caddyfile`, which discards any runtime edits.
-- **Edge hardening:** the `Caddyfile` adds a `read_header` (10s) timeout, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and strips `Server`. Request bodies are unbounded and untimed so [file transfer](#file-transfer) works through the HTTPS front; write/idle timeouts are omitted so long-lived WebSocket streams are not torn down.
-- **Still no rate limiting** even over HTTPS — keep it on a trusted network.
-
-rinnegan and Caddy can also run as two separate processes: `./bin/rinnegan serve`, then `./bin/caddy` with `XDG_DATA_HOME`/`XDG_CONFIG_HOME` pointed at a local directory.
-
-#### Bring your own domain
-
-The bundled `--https` path is self-signed. For a public domain with a real, browser-trusted certificate, run rinnegan localhost-only and put a proxy in front — your existing nginx, Traefik, ingress, or Caddy is fine, and `Caddyfile.domain.example` ships in every tarball if you have none. It serves one subdomain over Let's Encrypt with no credentials anywhere, and runs on the bundled stock `bin/caddy` because TLS-ALPN-01 needs no plugins. A wildcard certificate needs DNS-01 and therefore a Caddy you build yourself with the provider module.
-
-**See [docs/exposing.md](docs/exposing.md)** for the full runbook: the challenge trade-offs, DNS-01, the three ways to run the sample, and the `setcap` note for binding `:443`.
+Worth knowing even on a LAN: browsers gate clipboard access on a **secure context**, so reading an image off your clipboard and copying an upload path back out only work over HTTPS or `localhost`. Over plain HTTP to a LAN IP they degrade to select-the-text.

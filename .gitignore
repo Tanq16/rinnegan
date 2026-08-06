@@ -8,7 +8,6 @@ dist/
 # local dev runtime files
 config.json
 auth.json
-caddy-data/
 
 # OS cruft
 .DS_Store

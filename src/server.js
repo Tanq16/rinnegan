@@ -1,57 +1,14 @@
-import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { configDir, atomicWriteFileSync, resolveShell } from './config.js';
+import { resolveShell } from './config.js';
 import { parseCookies, verifySession, signSession, serializeCookie } from './auth.js';
 import { loadRecord, verify, fingerprint } from './password.js';
 import { createHttpServer } from './http.js';
 import { attachWebSocket } from './ws.js';
 import { attachTunnel } from './tunnel.js';
 import { info, error } from './log.js';
-
-function startCaddy(root, flags) {
-  const caddyBin = flags['caddy-bin'] ? path.resolve(flags['caddy-bin'])
-    : root ? path.join(root, 'bin', 'caddy') : null;
-  const dataDir = flags['caddy-data'] ? path.resolve(flags['caddy-data'])
-    : path.join(configDir(), 'caddy-data');
-  if (!caddyBin || !existsSync(caddyBin)) {
-    throw new Error(
-      `--https requires the bundled Caddy binary; not found at ${caddyBin ?? '<unknown>'}. ` +
-      `Run rinnegan from a release bundle, or pass --caddy-bin <path> --caddyfile <path>.`
-    );
-  }
-  const caddyfile = resolveCaddyfile(root, flags);
-  const proc = spawn(caddyBin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], {
-    stdio: 'inherit',
-    env: { ...process.env, XDG_DATA_HOME: dataDir, XDG_CONFIG_HOME: dataDir },
-  });
-  return { proc, caddyfile };
-}
-
-// Runtime Caddyfile lives under configDir() so it survives the updater wiping the release dir.
-export function resolveCaddyfile(root, flags) {
-  if (flags['caddyfile']) {
-    const explicit = path.resolve(flags['caddyfile']);
-    if (!existsSync(explicit)) throw new Error(`--https requires a Caddyfile; not found at ${explicit}.`);
-    return explicit;
-  }
-  const runtime = path.join(configDir(), 'Caddyfile');
-  const template = root ? path.join(root, 'Caddyfile') : null;
-  const refresh = flags['refresh-caddyfile'] === true;
-  const haveRuntime = existsSync(runtime);
-  if (refresh || !haveRuntime) {
-    if (!template || !existsSync(template)) {
-      if (!haveRuntime) throw new Error(`--https requires a Caddyfile; not found at ${template ?? '<unknown>'}.`);
-    } else {
-      if (refresh && haveRuntime) process.stderr.write(`warning: --refresh-caddyfile overwrites ${runtime}; local edits are discarded\n`);
-      atomicWriteFileSync(runtime, readFileSync(template), 0o600);
-    }
-  }
-  return runtime;
-}
 
 // os.userInfo() throws when the running uid has no passwd entry, which is common in containers.
 function osUser() {
@@ -63,10 +20,6 @@ function osUser() {
 }
 
 export function start(cfg, flags = {}) {
-  const https = flags.https === true;
-  if (https) cfg.cookie.secure = true;
-  if (https && cfg.listen.port !== 8442) process.stderr.write(`warning: --https bundled Caddyfile proxies to 127.0.0.1:8442 but listen.port is ${cfg.listen.port}; edit the Caddyfile to match\n`);
-
   // !== undefined, not truthiness: `--shell ""` must fail the allowlist, not fall through to the config default.
   if (flags.shell !== undefined) cfg.terminal.shell = resolveShell(flags.shell);
 
@@ -162,29 +115,16 @@ export function start(cfg, flags = {}) {
     socket.destroy();
   });
 
-  // hoisted so an abnormal server exit tears Caddy down instead of orphaning the public listener
-  let caddy;
   server.on('error', (e) => {
     error(`server error: ${e.message}`);
-    try { caddy?.kill('SIGTERM'); } catch {}
     process.exit(1);
   });
 
-  const shutdown = () => { try { caddy?.kill('SIGTERM'); } catch {} process.exit(0); };
+  const shutdown = () => process.exit(0);
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
   server.listen(cfg.listen.port, cfg.listen.host, () => {
     info(`rinnegan listening on http://${cfg.listen.host}:${server.address().port}`);
-    if (https) {
-      let started;
-      try { started = startCaddy(process.env.RINNEGAN_ROOT || null, flags); }
-      catch (e) { error(e.message); process.exit(1); }
-      caddy = started.proc;
-      // Naming the file rather than an address: the listeners and issuer are the Caddyfile's to define, and Caddy logs them itself.
-      info(`rinnegan HTTPS front (Caddy) starting with ${started.caddyfile}`);
-      caddy.on('exit', (code, sig) => { error(`caddy exited (code=${code} signal=${sig}); shutting down`); process.exit(code == null ? 1 : code); });
-      caddy.on('error', (e) => { error(`failed to start caddy: ${e.message}`); process.exit(1); });
-    }
   });
 }

@@ -1,4 +1,4 @@
 {
-  "server": "https://example.com:8443",
+  "server": "https://term.example.com",
   "ports": ["8080:80", "5432:5432", "3000"]
 }
