@@ -172,7 +172,7 @@ Password prompts are never echoed. `auth.json` is re-read on every login, so `pa
 
 `tunnel` forwards your `localhost:<local>` to the server's `localhost:<remote>` over an authenticated WebSocket (password prompted; `--insecure` accepts a self-signed proxy cert or a bare IP).
 
-`--config` forwards several ports over one login instead of a single `--local`/`--remote` pair. The file names the server once and lists the mappings (see `tunnel.example.json`); each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"` (same on both sides), or a `[<local>, <remote>]` pair:
+`--config` forwards several ports over one login instead of a single `--local`/`--remote` pair. The file names the server once and lists the mappings; each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"` (same on both sides), or a `[<local>, <remote>]` pair:
 
 ```json
 { "server": "https://term.example.com", "ports": ["8080:80", "5432:5432", "3000"] }
