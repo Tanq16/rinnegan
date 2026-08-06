@@ -14,13 +14,13 @@ Not an IDE, not a tmux manager. A terminal frontend for a box you own.
 
 ## Features
 
-- **Password in, shell out.** Real interactive shell over WebSocket, sized to your window.
-- **A shell per connection.** Spawned on demand, dies with the socket. Run `tmux` inside it for persistence.
-- **Pick your shell.** zsh, bash, or fish.
-- **Themes.** Switchable from the control panel, remembered per browser.
-- **Port tunnel.** Forward a local port to the server over an authenticated WebSocket. `ssh -L` without SSH.
-- **File transfer.** Upload files, folders, or a clipboard image to `/tmp`; download any host path (directories as `.tar.gz`).
-- **Self-contained tarball.** Bundles its own Node runtime. No Node, Python, or compiler needed on the host.
+- **Password in, shell out**: real interactive shell over WebSocket, sized to your window.
+- **A shell per connection**: spawned on demand, dies with the socket. Run `tmux` inside it for persistence.
+- **Pick your shell**: zsh, bash, or fish.
+- **Themes**: switchable from the control panel, remembered per browser.
+- **Port tunnel**: forward a local port to the server over an authenticated WebSocket. `ssh -L` without SSH.
+- **File transfer**: upload files, folders, or a clipboard image to `/tmp`; download any host path (directories as `.tar.gz`).
+- **Self-contained tarball**: bundles its own Node runtime. No Node, Python, or compiler needed on the host.
 
 ## Screenshots
 
@@ -101,10 +101,10 @@ zsh is the default and isn't on every minimal distro, so install it or point `te
 
 ## Notes
 
-- **Shell lifetime.** A dropped connection kills the shell; there is no reattach. Start `tmux` inside it and reconnect with `tmux attach`.
-- **Sessions.** The signing secret is regenerated every boot, so a restart logs everyone out. There is no revocation list.
-- **File transfer.** Uploads land in `/tmp` with a random prefix and are never typed into your terminal; the modal shows the path to paste. Nothing is size-capped. Downloads take an absolute host path.
-- **Clipboard needs HTTPS.** Browsers gate clipboard access on a secure context, so reading an image from the clipboard and copying the upload path only work over HTTPS or `localhost`.
+- **Shell lifetime**: a dropped connection kills the shell; there is no reattach. Start `tmux` inside it and reconnect with `tmux attach`.
+- **Sessions**: the signing secret is regenerated every boot, so a restart logs everyone out. There is no revocation list.
+- **File transfer**: uploads land in `/tmp` with a random prefix and are never typed into your terminal; the modal shows the path to paste. Nothing is size-capped. Downloads take an absolute host path.
+- **Clipboard needs HTTPS**: browsers gate clipboard access on a secure context, so reading an image from the clipboard and copying the upload path only work over HTTPS or `localhost`.
 - **Themes** recolor the page and the terminal's ANSI palette. Programs with their own colorscheme (vim, tmux) are unaffected.
 - **Fonts** are JetBrains Mono Nerd Font and Inter, bundled as woff2. Rendering is GPU-accelerated via WebGL, falling back to DOM.
 
@@ -114,7 +114,7 @@ zsh is the default and isn't on every minimal distro, so install it or point `te
 
 - Binds `127.0.0.1`. Keep it there unless a TLS proxy is in front.
 - One shared password, no accounts. Nothing is attributable, and rotating the password is the only way to revoke access.
-- **No login rate limiting.** Don't expose it to the internet without network-level access control.
+- **No login rate limiting**: don't expose it to the internet without network-level access control.
 - `--no-auth` disables authentication completely. Trusted, isolated boxes only.
 - Only a scrypt hash is stored; passwords and tokens are never logged.
 
