@@ -1,14 +1,14 @@
 # Exposing rinnegan
 
-Rinnegan serves plain HTTP on `127.0.0.1:8442`. Putting TLS in front is your job. Any proxy works — nginx, Caddy, Traefik, an ingress, a Cloudflare or Tailscale tunnel.
+Rinnegan serves plain HTTP on `127.0.0.1:8442`. Putting TLS in front is your job. Any proxy works: nginx, Caddy, Traefik, an ingress, a Cloudflare or Tailscale tunnel.
 
-> Rinnegan is a shell on the box, guarded by one password with no rate limiting. TLS is not access control — keep network-level restrictions in front of it.
+> Rinnegan is a shell on the box, guarded by one password with no rate limiting. TLS is not access control, so keep network-level restrictions in front of it.
 
 ## Requirements
 
 1. Reverse-proxy to `127.0.0.1:8442`.
 2. Pass WebSocket upgrades through (`/ws` and `/tunnel`).
-3. No request-body cap and no read timeout — uploads are unbounded, terminal sockets are long-lived.
+3. No request-body cap and no read timeout. Uploads are unbounded and terminal sockets are long-lived.
 4. Set `"cookie": {"secure": true}` in `~/.config/rinnegan/config.json`.
 
 Clipboard upload and copy-the-path need a secure context, so even a LAN box wants a certificate.
@@ -99,7 +99,7 @@ term.example.com {
 }
 ```
 
-TLS-ALPN-01 is built into stock Caddy. It needs the handshake to reach *this* Caddy, so it breaks behind a proxying CDN, an ALB, or NAT — use HTTP-01 (open 80, drop the `cert_issuer` block) instead.
+TLS-ALPN-01 is built into stock Caddy. It needs the handshake to reach *this* Caddy, so it breaks behind a proxying CDN, an ALB, or NAT. Use HTTP-01 (open 80, drop the `cert_issuer` block) instead.
 
 Wildcards need DNS-01, which needs a plugin for whoever hosts your DNS (`dig NS example.com +short`):
 

@@ -8,19 +8,19 @@
 
 ---
 
-A self-hosted **web terminal**. One password, and you get a real shell on the host in your browser. Built to reach the [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) setup from anywhere — homelab or VPS.
+A self-hosted **web terminal**. One password, and you get a real shell on the host in your browser. Built to reach the [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) setup from anywhere: homelab or VPS.
 
 Not an IDE, not a tmux manager. A terminal frontend for a box you own.
 
 ## Features
 
-- **Password in, shell out** — real interactive shell over WebSocket, sized to your window.
-- **A shell per connection** — spawned on demand, dies with the socket. Run `tmux` inside it for persistence.
-- **Pick your shell** — zsh, bash, or fish.
-- **Themes** — switchable from the control panel, remembered per browser.
-- **Port tunnel** — forward a local port to the server over an authenticated WebSocket. `ssh -L` without SSH.
-- **File transfer** — upload files, folders, or a clipboard image to `/tmp`; download any host path (directories as `.tar.gz`).
-- **Self-contained tarball** — bundles its own Node runtime. No Node, Python, or compiler needed on the host.
+- **Password in, shell out.** Real interactive shell over WebSocket, sized to your window.
+- **A shell per connection.** Spawned on demand, dies with the socket. Run `tmux` inside it for persistence.
+- **Pick your shell.** zsh, bash, or fish.
+- **Themes.** Switchable from the control panel, remembered per browser.
+- **Port tunnel.** Forward a local port to the server over an authenticated WebSocket. `ssh -L` without SSH.
+- **File transfer.** Upload files, folders, or a clipboard image to `/tmp`; download any host path (directories as `.tar.gz`).
+- **Self-contained tarball.** Bundles its own Node runtime. No Node, Python, or compiler needed on the host.
 
 ## Screenshots
 
@@ -42,7 +42,7 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan           # serve on 127.0.0.1:8442
 ```
 
-Open **http://127.0.0.1:8442** and log in. No password is seeded, and `serve` refuses to start without one — use `--no-auth` to skip login entirely (anyone who reaches the port gets a shell).
+Open **http://127.0.0.1:8442** and log in. No password is seeded, and `serve` refuses to start without one. Use `--no-auth` to skip login entirely (anyone who reaches the port gets a shell).
 
 **Update** with `./update.sh` from the install directory. It verifies the download before swapping it in and leaves `~/.config/rinnegan` alone.
 
@@ -57,7 +57,7 @@ make          # deps, vendored assets, PTY check
 npm run dev
 ```
 
-Needs **fnm** (Node 24.17.0, pinned in `.node-version`) and **uv** (Python for node-gyp). `node-pty` is compiled from source — Linux has no prebuilt, and the macOS prebuild's `spawn-helper` is not executable.
+Needs **fnm** (Node 24.17.0, pinned in `.node-version`) and **uv** (Python for node-gyp). `node-pty` is compiled from source, because Linux has no prebuilt, and the macOS prebuild's `spawn-helper` is not executable.
 
 ## CLI
 
@@ -89,7 +89,7 @@ Everything lives in `~/.config/rinnegan/` (mode 0700). `config.json` is seeded o
 | `listen.port` | `8442` | |
 | `cookie.name` | `rinnegan` | HttpOnly, SameSite=Lax |
 | `cookie.secure` | `false` | Set `true` once TLS is in front |
-| `cookie.accessTtlSeconds` | `10800` | 60–604800 |
+| `cookie.accessTtlSeconds` | `10800` | 60 to 604800 |
 | `cookie.refreshTtlSeconds` | `604800` | Minimum 60 |
 | `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace, no shell quoting |
 | `terminal.cwd` | `$HOME` | |
@@ -97,20 +97,20 @@ Everything lives in `~/.config/rinnegan/` (mode 0700). `config.json` is seeded o
 | `terminal.env` | `TERM`, `COLORTERM`, `LANG` | Merged over the server env |
 | `authFile` | `./auth.json` | Resolved under `~/.config/rinnegan` |
 
-zsh is the default and isn't on every minimal distro — install it or point `terminal.shell` elsewhere.
+zsh is the default and isn't on every minimal distro, so install it or point `terminal.shell` elsewhere.
 
 ## Notes
 
 - **Shell lifetime.** A dropped connection kills the shell; there is no reattach. Start `tmux` inside it and reconnect with `tmux attach`.
 - **Sessions.** The signing secret is regenerated every boot, so a restart logs everyone out. There is no revocation list.
-- **File transfer.** Uploads land in `/tmp` with a random prefix and are never typed into your terminal — the modal shows the path to paste. Nothing is size-capped. Downloads take an absolute host path.
+- **File transfer.** Uploads land in `/tmp` with a random prefix and are never typed into your terminal; the modal shows the path to paste. Nothing is size-capped. Downloads take an absolute host path.
 - **Clipboard needs HTTPS.** Browsers gate clipboard access on a secure context, so reading an image from the clipboard and copying the upload path only work over HTTPS or `localhost`.
 - **Themes** recolor the page and the terminal's ANSI palette. Programs with their own colorscheme (vim, tmux) are unaffected.
 - **Fonts** are JetBrains Mono Nerd Font and Inter, bundled as woff2. Rendering is GPU-accelerated via WebGL, falling back to DOM.
 
 ## Security
 
-**Treat it like SSH access — it is a shell on the machine it runs on.**
+**Treat it like SSH access. It is a shell on the machine it runs on.**
 
 - Binds `127.0.0.1`. Keep it there unless a TLS proxy is in front.
 - One shared password, no accounts. Nothing is attributable, and rotating the password is the only way to revoke access.
@@ -120,6 +120,6 @@ zsh is the default and isn't on every minimal distro — install it or point `te
 
 ### Exposing it
 
-Rinnegan serves plain HTTP and terminates no TLS — put your own proxy in front. It needs three things from it: WebSocket upgrades passed through, no request-body cap or read timeout, and `cookie.secure: true` in your config.
+Rinnegan serves plain HTTP and terminates no TLS, so put your own proxy in front. It needs three things from it: WebSocket upgrades passed through, no request-body cap or read timeout, and `cookie.secure: true` in your config.
 
 See **[docs/exposing.md](docs/exposing.md)** for working Caddy and nginx configs.
