@@ -39,19 +39,6 @@ APP_DIR="$SMOKE_DIR/$BUNDLE_NAME"
 [ -x "$APP_DIR/runtime/bin/node" ] || die "bundled node missing/not executable"
 [ -x "$APP_DIR/update.sh" ] || die "update.sh missing or not executable"
 
-# A manifest promising DNS modules must be backed by a binary carrying them; an absent manifest is a deliberate CADDY_BUILD=stock.
-CADDY_DNS_MANIFEST="$APP_DIR/licenses/caddy-dns-modules.txt"
-if [ -f "$CADDY_DNS_MANIFEST" ]; then
-  CADDY_MODULES="$("$APP_DIR/bin/caddy" list-modules)" || die "bin/caddy list-modules failed"
-  while read -r url _; do
-    case "$url" in https://github.com/caddy-dns/*) ;; *) continue ;; esac
-    provider="${url##*/}"
-    echo "$CADDY_MODULES" | grep -q "^dns\.providers\.${provider}$" \
-      || die "bin/caddy is missing dns.providers.${provider} promised by the license manifest"
-  done < "$CADDY_DNS_MANIFEST"
-  echo "bundled Caddy carries its pinned DNS provider modules -> OK"
-fi
-
 cd "$APP_DIR"
 
 # serve self-seeds config.json into ~/.config/rinnegan; sandbox HOME so it lands in the temp dir, never the real home.

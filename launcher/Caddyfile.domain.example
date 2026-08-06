@@ -1,5 +1,6 @@
 # Real-domain HTTPS for one subdomain, with no credentials anywhere. Replace example.com and go.
-# Let's Encrypt validates by connecting back to this box on 443 (TLS-ALPN-01), so it only works when the box is publicly reachable there. Behind NAT, or for a wildcard, use Caddyfile.wildcard.example instead.
+# Runs on the bundled bin/caddy or any stock Caddy: TLS-ALPN-01 is built into core, and only DNS-01 would need a provider plugin.
+# Let's Encrypt validates by completing a TLS handshake against *this* Caddy on 443, so the box must be publicly reachable there and nothing may terminate TLS in front of it — behind NAT, behind a proxying CDN, or for a wildcard, you need HTTP-01 or DNS-01 and a Caddy built with the matching plugin.
 #
 # Domain side, once:
 #   1. A record  term.example.com -> this server's public IP. Use a static/Elastic IP; an ephemeral one changes on stop/start and silently breaks the record.

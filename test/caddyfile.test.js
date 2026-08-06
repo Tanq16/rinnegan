@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCaddyfile } from '../src/server.js';
 
 const TEMPLATE = fileURLToPath(new URL('../launcher/Caddyfile', import.meta.url));
+const DOMAIN_SAMPLE = fileURLToPath(new URL('../launcher/Caddyfile.domain.example', import.meta.url));
 const HOURS = { h: 1, d: 24 };
 const toHours = (v) => Number(v.slice(0, -1)) * HOURS[v.slice(-1)];
 
@@ -53,6 +54,15 @@ test('bundled Caddyfile template', async (t) => {
       `intermediate ${intermediate[1]} must outlast leaf ${leaf} or Caddy clamps the leaf`
     );
   });
+});
+
+// bin/caddy is a stock build with no dns.providers linked in, so a sample naming a DNS solver would fail at Caddy startup for the user rather than here.
+test('the shipped domain sample asks for nothing the bundled Caddy lacks', () => {
+  const solver = readFileSync(DOMAIN_SAMPLE, 'utf8')
+    .split('\n')
+    .map((line) => line.replace(/#.*$/, '').trim())
+    .find((line) => /^dns\s+\S/.test(line));
+  assert.equal(solver, undefined, `a DNS-01 solver needs an xcaddy-built binary: ${solver}`);
 });
 
 test('resolveCaddyfile returns an explicit --caddyfile that exists', () => {

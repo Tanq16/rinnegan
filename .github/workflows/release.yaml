@@ -100,28 +100,6 @@ jobs:
       - name: Install dependencies (compile node-pty native from source)
         run: npm_config_build_from_source=true npm ci
 
-      # bundle.sh builds bin/caddy with xcaddy so the shipped DNS-01 Caddyfile samples run on it.
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.25'
-
-      - name: Resolve Go cache paths
-        id: go-cache
-        run: |
-          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
-          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-
-      # bundle.sh pins the Caddy, xcaddy, and DNS module versions, so it is the cache key.
-      - name: Cache the Go build and module caches
-        uses: actions/cache@v6
-        with:
-          path: |
-            ${{ steps.go-cache.outputs.build }}
-            ${{ steps.go-cache.outputs.mod }}
-          key: caddy-${{ matrix.runner }}-${{ hashFiles('scripts/bundle.sh') }}
-          restore-keys: caddy-${{ matrix.runner }}-
-
       - name: Stamp release version into package.json
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
