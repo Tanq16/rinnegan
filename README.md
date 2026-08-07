@@ -108,7 +108,10 @@ zsh is the default and is missing from some minimal distros, so install it or po
 - **Uploads**: files land in `/tmp` under a random prefix, and the modal shows you the path to paste rather than typing it into your terminal.
 - **Downloads**: the Files panel takes an absolute host path and streams a directory back as `.tar.gz`.
 - **Clipboard**: browsers gate clipboard access on a secure context, so reading an image and copying a path work only over HTTPS or `localhost`.
-- **Themes**: a theme recolors the page and the terminal's ANSI palette, but never a program that carries its own colorscheme.
+- **Themes**: the dropdown carries Catppuccin, Gruvbox, Dracula, Tokyo Night, Monokai Pro, Atom One, Everforest, and Nord, in dark and light pairs wherever upstream publishes both.
+- **Theme reach**: a theme recolors the page and the terminal's ANSI palette, so a program drawing in ANSI 0-15 follows it while one carrying its own colors does not.
+- **Color**: the terminal renders 24-bit color end to end, and it leaves bold text unbrightened the way kitty does.
+- **Cursor**: the cursor is a steady beam in the theme's cursor color, and nothing running in the shell can recolor it or make it blink.
 - **Fonts**: the terminal uses JetBrains Mono Nerd Font and the interface uses Inter, both bundled as woff2.
 - **Rendering**: xterm draws through WebGL and falls back to the DOM renderer when WebGL2 is unavailable.
 
