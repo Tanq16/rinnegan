@@ -8,32 +8,32 @@
 
 ---
 
-A self-hosted **web terminal**. One password, and you get a real shell on the host in your browser. Built to reach the [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) setup from anywhere: homelab or VPS.
+Rinnegan is a self-hosted web terminal. One password gets you a real interactive shell on the host, in your browser.
 
-Not an IDE, not a tmux manager. A terminal frontend for a box you own.
+It exists to reach a [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) setup from anywhere, on a homelab box or a VPS. It is not an IDE or a tmux manager, and it is a terminal frontend for a machine you already own.
 
 ## Features
 
-- **Password in, shell out**: real interactive shell over WebSocket, sized to your window.
-- **A shell per connection**: spawned on demand, dies with the socket. Run `tmux` inside it for persistence.
-- **Pick your shell**: zsh, bash, or fish.
-- **Themes**: switchable from the control panel, remembered per browser.
-- **Port tunnel**: forward a local port to the server over an authenticated WebSocket. `ssh -L` without SSH.
-- **File transfer**: upload files, folders, or a clipboard image to `/tmp`; download any host path (directories as `.tar.gz`).
-- **Self-contained tarball**: bundles its own Node runtime. No Node, Python, or compiler needed on the host.
+- **Password in, shell out**: one password on the login page gives you a real interactive shell over WebSocket, sized to your window.
+- **A shell per connection**: every browser connection spawns its own shell, which dies when the socket closes.
+- **Pick your shell**: rinnegan starts zsh, bash, or fish.
+- **Themes**: the control panel switches themes, and each browser remembers its own choice.
+- **Port tunnel**: rinnegan forwards a local port to the server over an authenticated WebSocket, the way `ssh -L` does without SSH.
+- **File transfer**: you upload files, folders, or a clipboard image to `/tmp`, and download any host path.
+- **Self-contained tarball**: every release bundles its own Node runtime, so the host needs no Node, Python, or compiler.
 
 ## Screenshots
 
 <details>
 <summary>Click to expand</summary>
 
-No screenshots yet.
+There are no screenshots yet.
 
 </details>
 
 ## Install
 
-Grab the tarball for your platform from [Releases](https://github.com/Tanq16/rinnegan/releases) (Linux and macOS, x64 and arm64).
+Download the tarball for your platform from [Releases](https://github.com/Tanq16/rinnegan/releases). Builds cover Linux and macOS on x64 and arm64.
 
 ```sh
 tar xf rinnegan-<os>-<arch>.tar.gz
@@ -42,11 +42,11 @@ cd rinnegan-<os>-<arch>
 ./bin/rinnegan           # serve on 127.0.0.1:8442
 ```
 
-Open **http://127.0.0.1:8442** and log in. No password is seeded, and `serve` refuses to start without one. Use `--no-auth` to skip login entirely (anyone who reaches the port gets a shell).
+Open **http://127.0.0.1:8442** and log in. No password is seeded on first run, and `serve` refuses to start until you set one. Passing `--no-auth` skips the login page entirely, which hands a shell to anyone who reaches the port.
 
-**Update** with `./update.sh` from the install directory. It verifies the download before swapping it in and leaves `~/.config/rinnegan` alone.
+**Updating**: run `./update.sh` from the install directory. It verifies the download before swapping it in, and it leaves `~/.config/rinnegan` untouched.
 
-**macOS** may block the bundled `node`. The launcher clears the quarantine flag itself; if it still balks, run `xattr -dr com.apple.quarantine rinnegan-<os>-<arch>`.
+**macOS**: Gatekeeper may block the bundled `node`. The launcher clears the quarantine flag on startup, and you can clear it yourself with `xattr -dr com.apple.quarantine rinnegan-<os>-<arch>`.
 
 ### From source
 
@@ -57,7 +57,7 @@ make          # deps, vendored assets, PTY check
 npm run dev
 ```
 
-Needs **fnm** (Node 24.17.0, pinned in `.node-version`) and **uv** (Python for node-gyp). `node-pty` is compiled from source, because Linux has no prebuilt, and the macOS prebuild's `spawn-helper` is not executable.
+The build needs **fnm** for the pinned Node in `.node-version` and **uv** for the Python that node-gyp calls. It compiles `node-pty` from source, because Linux ships no prebuilt binary and the macOS prebuild's `spawn-helper` is not executable.
 
 ## CLI
 
@@ -69,11 +69,11 @@ Needs **fnm** (Node 24.17.0, pinned in `.node-version`) and **uv** (Python for n
 ./bin/rinnegan tunnel --config <path> [--insecure]
 ```
 
-`passwd` takes effect without a restart, and rotating it kills every live session within one access-TTL.
+`passwd` takes effect on a running server without a restart. Rotating the password kills every live session within one access-TTL.
 
-`--shell` takes only `zsh`, `bash`, or `fish`; anything else is a startup error. For anything more, set `terminal.shell` in the config.
+`--shell` accepts only `zsh`, `bash`, or `fish`, and anything else is a startup error. Set `terminal.shell` in the config for any other command.
 
-`tunnel --config` forwards several ports over one login. Each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"`, or `[<local>, <remote>]`:
+`tunnel --config` forwards several ports over a single login. Each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"`, or `[<local>, <remote>]`.
 
 ```json
 { "server": "https://term.example.com", "ports": ["8080:80", "5432:5432", "3000"] }
@@ -81,45 +81,48 @@ Needs **fnm** (Node 24.17.0, pinned in `.node-version`) and **uv** (Python for n
 
 ## Configuration
 
-Everything lives in `~/.config/rinnegan/` (mode 0700). `config.json` is seeded on first run and deep-merged over the defaults, so set only what you change. `auth.json` holds the scrypt password record.
+All state lives in `~/.config/rinnegan/`, created mode 0700. `config.json` is seeded on first run and deep-merged over the defaults, so you set only what you change. `auth.json` holds the scrypt password record.
 
 | Field | Default | Notes |
 | ----- | ------- | ----- |
-| `listen.host` | `127.0.0.1` | Keep it here; put a TLS proxy in front to expose |
+| `listen.host` | `127.0.0.1` | Keep it here, and put a TLS proxy in front to expose it |
 | `listen.port` | `8442` | |
 | `cookie.name` | `rinnegan` | HttpOnly, SameSite=Lax |
-| `cookie.secure` | `false` | Set `true` once TLS is in front |
-| `cookie.accessTtlSeconds` | `10800` | 60 to 604800 |
-| `cookie.refreshTtlSeconds` | `604800` | Minimum 60 |
-| `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace, no shell quoting |
+| `cookie.secure` | `false` | Set it to `true` once TLS is in front |
+| `cookie.accessTtlSeconds` | `10800` | Accepts 60 to 604800 |
+| `cookie.refreshTtlSeconds` | `604800` | Minimum is 60 |
+| `terminal.shell` | `/usr/bin/env zsh -l` | Split on whitespace, with no shell quoting |
 | `terminal.cwd` | `$HOME` | |
-| `terminal.cols` / `rows` | `120` / `36` | Fallback only; your viewport normally decides |
+| `terminal.cols` / `rows` | `120` / `36` | A fallback grid, since your viewport normally decides |
 | `terminal.env` | `TERM`, `COLORTERM`, `LANG` | Merged over the server env |
 | `authFile` | `./auth.json` | Resolved under `~/.config/rinnegan` |
 
-zsh is the default and isn't on every minimal distro, so install it or point `terminal.shell` elsewhere.
+zsh is the default and is missing from some minimal distros, so install it or point `terminal.shell` at another shell.
 
 ## Notes
 
-- **Shell lifetime**: a dropped connection kills the shell; there is no reattach. Start `tmux` inside it and reconnect with `tmux attach`.
-- **Sessions**: the signing secret is regenerated every boot, so a restart logs everyone out. There is no revocation list.
-- **File transfer**: uploads land in `/tmp` with a random prefix and are never typed into your terminal; the modal shows the path to paste. Nothing is size-capped. Downloads take an absolute host path.
-- **Clipboard needs HTTPS**: browsers gate clipboard access on a secure context, so reading an image from the clipboard and copying the upload path only work over HTTPS or `localhost`.
-- **Themes** recolor the page and the terminal's ANSI palette. Programs with their own colorscheme (vim, tmux) are unaffected.
-- **Fonts** are JetBrains Mono Nerd Font and Inter, bundled as woff2. Rendering is GPU-accelerated via WebGL, falling back to DOM.
+- **Shell lifetime**: a dropped connection kills the shell, so run `tmux` inside it when you need to reattach.
+- **Sessions**: the signing secret is regenerated on every boot, so a restart logs everyone out.
+- **Uploads**: files land in `/tmp` under a random prefix, and the modal shows you the path to paste rather than typing it into your terminal.
+- **Downloads**: the Files panel takes an absolute host path and streams a directory back as `.tar.gz`.
+- **Clipboard**: browsers gate clipboard access on a secure context, so reading an image and copying a path work only over HTTPS or `localhost`.
+- **Themes**: a theme recolors the page and the terminal's ANSI palette, but never a program that carries its own colorscheme.
+- **Fonts**: the terminal uses JetBrains Mono Nerd Font and the interface uses Inter, both bundled as woff2.
+- **Rendering**: xterm draws through WebGL and falls back to the DOM renderer when WebGL2 is unavailable.
 
 ## Security
 
-**Treat it like SSH access. It is a shell on the machine it runs on.**
+**Treat rinnegan like SSH access, because it is a shell on the machine it runs on.**
 
-- Binds `127.0.0.1`. Keep it there unless a TLS proxy is in front.
-- One shared password, no accounts. Nothing is attributable, and rotating the password is the only way to revoke access.
-- **No login rate limiting**: don't expose it to the internet without network-level access control.
-- `--no-auth` disables authentication completely. Trusted, isolated boxes only.
-- Only a scrypt hash is stored; passwords and tokens are never logged.
+- Rinnegan binds `127.0.0.1`, and it should stay there unless a TLS proxy sits in front.
+- There is one shared password and no accounts, so no action is attributable to a person.
+- Rotating the password is the only way to revoke access, and it takes one access-TTL.
+- Rinnegan does no login rate limiting, so do not expose it without network-level access control.
+- `--no-auth` disables authentication completely, so use it only on a trusted, isolated box.
+- Only a scrypt hash is stored, and passwords and tokens are never logged.
 
 ### Exposing it
 
-Rinnegan serves plain HTTP and terminates no TLS, so put your own proxy in front. It needs three things from it: WebSocket upgrades passed through, no request-body cap or read timeout, and `cookie.secure: true` in your config.
+Rinnegan serves plain HTTP and terminates no TLS, so you put your own proxy in front. That proxy has to pass WebSocket upgrades through, impose no request-body cap or read timeout, and you set `cookie.secure` to `true` once it is running.
 
-See **[docs/exposing.md](docs/exposing.md)** for working Caddy and nginx configs.
+See [docs/exposing.md](docs/exposing.md) for working Caddy and nginx configs.
