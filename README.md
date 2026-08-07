@@ -17,7 +17,7 @@ It exists to reach a [CLI Productivity Suite](https://github.com/Tanq16/cli-Prod
 - **Password in, shell out**: one password on the login page gives you a real interactive shell over WebSocket, sized to your window.
 - **A shell per connection**: every browser connection spawns its own shell, which dies when the socket closes.
 - **Pick your shell**: rinnegan starts zsh, bash, or fish.
-- **Themes**: the control panel switches themes, and each browser remembers its own choice.
+- **Fifteen themes**: the control panel switches between the same palettes `cps theme` deploys to kitty, and each browser remembers its own choice.
 - **Port tunnel**: rinnegan forwards a local port to the server over an authenticated WebSocket, the way `ssh -L` does without SSH.
 - **File transfer**: you upload files, folders, or a clipboard image to `/tmp`, and download any host path.
 - **Self-contained tarball**: every release bundles its own Node runtime, so the host needs no Node, Python, or compiler.
@@ -58,6 +58,8 @@ npm run dev
 ```
 
 The build needs **fnm** for the pinned Node in `.node-version` and **uv** for the Python that node-gyp calls. It compiles `node-pty` from source, because Linux ships no prebuilt binary and the macOS prebuild's `spawn-helper` is not executable.
+
+`scripts/gen-themes.mjs` regenerates the palettes from a [CLI Productivity Suite](https://github.com/Tanq16/cli-Productivity-Suite) checkout. Pass it the theme directory plus `css` for the `public/styles.css` blocks, `html` for the dropdown, or no argument for a contrast audit.
 
 ## CLI
 
