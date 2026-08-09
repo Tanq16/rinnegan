@@ -75,7 +75,7 @@ The build needs **fnm** for the pinned Node in `.node-version` and **uv** for th
 
 `--shell` accepts only `zsh`, `bash`, or `fish`, and anything else is a startup error. Set `terminal.shell` in the config for any other command.
 
-`--listen` overrides `listen.host` and `listen.port` for one run, so `--listen 0.0.0.0:9000` reaches the box from the LAN and `--listen :9000` is the same thing. It takes an IPv6 literal as `[::]:9000`, and anything that is not `host:port` is a startup error.
+`--listen` overrides `listen.host` and `listen.port` for one run, so `--listen 0.0.0.0:9000` reaches the box from the LAN. Omitting the host keeps the configured one, which makes `--listen :9000` a port change and nothing more. It takes an IPv6 literal as `[::]:9000`, and anything that is not `host:port` is a startup error.
 
 `tunnel --config` forwards several ports over a single login. Each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"`, or `[<local>, <remote>]`.
 

@@ -22,7 +22,7 @@ function osUser() {
 export function start(cfg, flags = {}) {
   // !== undefined, not truthiness: `--shell ""` must fail the allowlist, not fall through to the config default.
   if (flags.shell !== undefined) cfg.terminal.shell = resolveShell(flags.shell);
-  if (flags.listen !== undefined) cfg.listen = resolveListen(flags.listen);
+  if (flags.listen !== undefined) cfg.listen = resolveListen(flags.listen, cfg.listen.host);
 
   const noAuth = flags['no-auth'] === true;
   const authOn = !noAuth;

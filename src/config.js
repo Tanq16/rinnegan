@@ -31,7 +31,8 @@ export function resolveShell(name) {
   return `/usr/bin/env ${name} -l`;
 }
 
-export function resolveListen(value) {
+// An omitted host keeps the configured one rather than meaning every interface: `--listen :9000` must not widen the bind when only the port was meant.
+export function resolveListen(value, fallbackHost = DEFAULTS.listen.host) {
   const m = typeof value === 'string' ? value.match(/^(.*):(\d+)$/) : null;
   const port = m ? Number(m[2]) : NaN;
   if (!m || port > 65535) {
@@ -39,7 +40,7 @@ export function resolveListen(value) {
   }
   // Anchoring the port to the trailing digit run splits at the last colon, so an IPv6 literal keeps its own; Node's listen wants it unbracketed.
   const host = m[1].trim().replace(/^\[(.*)\]$/, '$1');
-  return { host: host === '' ? '0.0.0.0' : host, port };
+  return { host: host === '' ? fallbackHost : host, port };
 }
 
 function isPlainObject(v) {
