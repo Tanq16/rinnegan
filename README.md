@@ -65,7 +65,7 @@ The build needs **fnm** for the pinned Node in `.node-version` and **uv** for th
 
 ```
 ./bin/rinnegan                              # serve (default)
-./bin/rinnegan serve [--no-auth] [--shell zsh|bash|fish]
+./bin/rinnegan serve [--no-auth] [--shell zsh|bash|fish] [--listen <host>:<port>]
 ./bin/rinnegan passwd                       # set the login password
 ./bin/rinnegan tunnel --server <url> --local <port> --remote <port> [--insecure]
 ./bin/rinnegan tunnel --config <path> [--insecure]
@@ -74,6 +74,8 @@ The build needs **fnm** for the pinned Node in `.node-version` and **uv** for th
 `passwd` takes effect on a running server without a restart. Rotating the password kills every live session within one access-TTL.
 
 `--shell` accepts only `zsh`, `bash`, or `fish`, and anything else is a startup error. Set `terminal.shell` in the config for any other command.
+
+`--listen` overrides `listen.host` and `listen.port` for one run, so `--listen 0.0.0.0:9000` reaches the box from the LAN and `--listen :9000` is the same thing. It takes an IPv6 literal as `[::]:9000`, and anything that is not `host:port` is a startup error.
 
 `tunnel --config` forwards several ports over a single login. Each `ports` entry is `"<local>:<remote>"`, a bare `"<port>"`, or `[<local>, <remote>]`.
 
@@ -87,8 +89,8 @@ All state lives in `~/.config/rinnegan/`, created mode 0700. `config.json` is se
 
 | Field | Default | Notes |
 | ----- | ------- | ----- |
-| `listen.host` | `127.0.0.1` | Keep it here, and put a TLS proxy in front to expose it |
-| `listen.port` | `8442` | |
+| `listen.host` | `127.0.0.1` | Keep it here, and put a TLS proxy in front to expose it; `--listen` overrides it |
+| `listen.port` | `8442` | `--listen` overrides it |
 | `cookie.name` | `rinnegan` | HttpOnly, SameSite=Lax |
 | `cookie.secure` | `false` | Set it to `true` once TLS is in front |
 | `cookie.accessTtlSeconds` | `10800` | Accepts 60 to 604800 |

@@ -6,9 +6,10 @@ import { start } from '../src/server.js';
 import { runTunnel, runTunnels, parseTunnelConfig, validatePort } from '../src/tunnel-client.js';
 
 const USAGE = `usage:
-  rinnegan serve [--no-auth] [--shell zsh|bash|fish]
+  rinnegan serve [--no-auth] [--shell zsh|bash|fish] [--listen <host>:<port>]
   (--no-auth disables all authentication; anyone who reaches the port gets a host shell)
   (--shell overrides terminal.shell from config.json; anything else is a startup error)
+  (--listen overrides listen.host and listen.port from config.json; an empty host binds every interface)
   rinnegan tunnel --server <url> --local <port> --remote <port> [--insecure]
   (forwards localhost:<local> to the server's localhost:<remote> over an authenticated WebSocket)
   rinnegan tunnel --config <path> [--insecure]
