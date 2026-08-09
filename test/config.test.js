@@ -157,7 +157,6 @@ test('resolveListen', async (t) => {
     { name: 'non-integer port rejected', in: ':80.5', err: /--listen must be host:port/ },
     { name: 'non-numeric port rejected', in: 'localhost:http', err: /--listen must be host:port/ },
     { name: 'trailing newline rejected', in: '0.0.0.0:9000\n', err: /--listen must be host:port/ },
-    // `--listen ""` parses to an empty string, and a truthiness check would silently fall through to the default
     { name: 'empty string rejected', in: '', err: /--listen must be host:port/ },
     { name: 'undefined rejected', in: undefined, err: /--listen must be host:port/ },
   ];

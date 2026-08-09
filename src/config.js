@@ -31,14 +31,12 @@ export function resolveShell(name) {
   return `/usr/bin/env ${name} -l`;
 }
 
-// An omitted host keeps the configured one rather than meaning every interface: `--listen :9000` must not widen the bind when only the port was meant.
 export function resolveListen(value, fallbackHost = DEFAULTS.listen.host) {
   const m = typeof value === 'string' ? value.match(/^(.*):(\d+)$/) : null;
   const port = m ? Number(m[2]) : NaN;
   if (!m || port > 65535) {
     throw new Error('--listen must be host:port with port 0-65535, like 0.0.0.0:8442 or :8442');
   }
-  // Anchoring the port to the trailing digit run splits at the last colon, so an IPv6 literal keeps its own; Node's listen wants it unbracketed.
   const host = m[1].trim().replace(/^\[(.*)\]$/, '$1');
   return { host: host === '' ? fallbackHost : host, port };
 }
