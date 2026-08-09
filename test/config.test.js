@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadConfig, resolveShell } from '../src/config.js';
+import { loadConfig, resolveShell, resolveListen } from '../src/config.js';
 
 let dir, prevHome, CONFIG_DIR;
 before(() => {
@@ -135,6 +135,13 @@ test('loadConfig validation boundaries', async (t) => {
       else assert.doesNotThrow(() => loadConfig());
     });
   }
+});
+
+test('resolveListen', () => {
+  assert.deepEqual(resolveListen(':9000', '0.0.0.0'), { host: '0.0.0.0', port: 9000 });
+  assert.deepEqual(resolveListen('[::]:9000'), { host: '::', port: 9000 });
+  assert.throws(() => resolveListen('9000'), /--listen must be host:port/);
+  assert.throws(() => resolveListen(':65536'), /--listen must be host:port/);
 });
 
 test('resolveShell', async (t) => {

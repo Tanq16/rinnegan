@@ -31,6 +31,16 @@ export function resolveShell(name) {
   return `/usr/bin/env ${name} -l`;
 }
 
+export function resolveListen(value, fallbackHost = DEFAULTS.listen.host) {
+  const m = typeof value === 'string' ? value.match(/^(.*):(\d+)$/) : null;
+  const port = m ? Number(m[2]) : NaN;
+  if (!m || port > 65535) {
+    throw new Error('--listen must be host:port with port 0-65535, like 0.0.0.0:8442 or :8442');
+  }
+  const host = m[1].trim().replace(/^\[(.*)\]$/, '$1');
+  return { host: host === '' ? fallbackHost : host, port };
+}
+
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }

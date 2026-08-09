@@ -2,7 +2,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolveShell } from './config.js';
+import { resolveShell, resolveListen } from './config.js';
 import { parseCookies, verifySession, signSession, serializeCookie } from './auth.js';
 import { loadRecord, verify, fingerprint } from './password.js';
 import { createHttpServer } from './http.js';
@@ -22,6 +22,7 @@ function osUser() {
 export function start(cfg, flags = {}) {
   // !== undefined, not truthiness: `--shell ""` must fail the allowlist, not fall through to the config default.
   if (flags.shell !== undefined) cfg.terminal.shell = resolveShell(flags.shell);
+  if (flags.listen !== undefined) cfg.listen = resolveListen(flags.listen, cfg.listen.host);
 
   const noAuth = flags['no-auth'] === true;
   const authOn = !noAuth;
