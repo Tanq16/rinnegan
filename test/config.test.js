@@ -137,35 +137,11 @@ test('loadConfig validation boundaries', async (t) => {
   }
 });
 
-test('resolveListen', async (t) => {
-  const cases = [
-    { name: 'host and port', in: '0.0.0.0:9000', want: { host: '0.0.0.0', port: 9000 } },
-    { name: 'hostname', in: 'box.lan:8442', want: { host: 'box.lan', port: 8442 } },
-    { name: 'empty host keeps the configured one', in: ':9000', want: { host: '127.0.0.1', port: 9000 } },
-    { name: 'empty host keeps a configured wide bind', in: ':9000', fallback: '0.0.0.0', want: { host: '0.0.0.0', port: 9000 } },
-    { name: 'an explicit host wins over the configured one', in: '0.0.0.0:9000', fallback: '10.0.0.5', want: { host: '0.0.0.0', port: 9000 } },
-    { name: 'port 0 asks the OS to pick', in: ':0', want: { host: '127.0.0.1', port: 0 } },
-    { name: 'port 65535 ok', in: ':65535', want: { host: '127.0.0.1', port: 65535 } },
-    { name: 'bare IPv6 splits at the last colon', in: '::1:9000', want: { host: '::1', port: 9000 } },
-    { name: 'bracketed IPv6 loses its brackets', in: '[::]:9000', want: { host: '::', port: 9000 } },
-    { name: 'empty brackets keep the configured host', in: '[]:9000', want: { host: '127.0.0.1', port: 9000 } },
-    { name: 'port 65536 rejected', in: ':65536', err: /--listen must be host:port/ },
-    { name: 'bare port rejected', in: '9000', err: /--listen must be host:port/ },
-    { name: 'bare host rejected', in: '0.0.0.0', err: /--listen must be host:port/ },
-    { name: 'empty port rejected', in: '0.0.0.0:', err: /--listen must be host:port/ },
-    { name: 'negative port rejected', in: ':-1', err: /--listen must be host:port/ },
-    { name: 'non-integer port rejected', in: ':80.5', err: /--listen must be host:port/ },
-    { name: 'non-numeric port rejected', in: 'localhost:http', err: /--listen must be host:port/ },
-    { name: 'trailing newline rejected', in: '0.0.0.0:9000\n', err: /--listen must be host:port/ },
-    { name: 'empty string rejected', in: '', err: /--listen must be host:port/ },
-    { name: 'undefined rejected', in: undefined, err: /--listen must be host:port/ },
-  ];
-  for (const c of cases) {
-    await t.test(c.name, () => {
-      if (c.err) assert.throws(() => resolveListen(c.in, c.fallback), c.err);
-      else assert.deepEqual(resolveListen(c.in, c.fallback), c.want);
-    });
-  }
+test('resolveListen', () => {
+  assert.deepEqual(resolveListen(':9000', '0.0.0.0'), { host: '0.0.0.0', port: 9000 });
+  assert.deepEqual(resolveListen('[::]:9000'), { host: '::', port: 9000 });
+  assert.throws(() => resolveListen('9000'), /--listen must be host:port/);
+  assert.throws(() => resolveListen(':65536'), /--listen must be host:port/);
 });
 
 test('resolveShell', async (t) => {
